@@ -628,7 +628,90 @@ EOF
 # Function to set up monitoring tools
 install_monitor_benchmark_tools() {
   if whiptail --title "Monitor and Benchmark Tools" --yesno "Would you like to install system monitor and benchmark tools?" 8 70; then
-  # Function to clean up and complete setup
+    monitoring_tools=$(whiptail --title "Monitor and Benchmark Tools" --checklist \
+      "Select tools to install:" 15 60 3 \
+      "btop" "Modern resource monitor" ON \
+      "speedtest-cli" "Internet speed test" ON \
+      "fastfetch" "System information display" ON 3>&1 1>&2 2>&3)
+    
+    if [[ $? -eq 0 && ! -z "$monitoring_tools" ]]; then
+      # Install selected tools
+      if [[ $monitoring_tools == *"btop"* ]]; then
+        msg_info "Installing btop..."
+        apt install -y btop
+        msg_ok "btop installed"
+      fi
+      
+      if [[ $monitoring_tools == *"speedtest-cli"* ]]; then
+        msg_info "Installing speedtest-cli..."
+        apt install -y speedtest-cli
+        msg_ok "speedtest-cli installed"
+      fi
+      
+      if [[ $monitoring_tools == *"fastfetch"* ]]; then
+        msg_info "Installing fastfetch..."
+        add-apt-repository ppa:zhangsongcui3371/fastfetch -y
+        apt update
+        apt install -y fastfetch
+        msg_ok "fastfetch installed"
+      fi
+      
+      msg_ok "Monitoring tools installed successfully"
+    else
+      msg_info "No monitoring tools selected"
+    fi
+  else
+    msg_info "Monitoring tools installation skipped"
+  fi
+}
+
+# Function to set up Logwatch
+setup_logwatch() {
+  if whiptail --title "Logwatch Setup" --yesno "Would you like to install and configure Logwatch for log monitoring?\n\nLogwatch provides daily system log analysis and reports." 10 70; then
+    msg_info "Installing Logwatch..."
+    
+    # Configure postfix noninteractively
+    configure_postfix_noninteractive
+    
+    apt install -y logwatch mailutils
+    
+    # Get admin email
+    admin_email=$(whiptail --inputbox "Enter email address for system reports:" 8 70 "admin@$(hostname -f)" 3>&1 1>&2 2>&3)
+    
+    if [[ $? -eq 0 && ! -z "$admin_email" ]]; then
+      # Create optimized configuration
+      mkdir -p /etc/logwatch/conf
+      cat > /etc/logwatch/conf/logwatch.conf << EOF
+# Logwatch configuration - Best practices
+Output = mail
+Format = html
+MailTo = $admin_email
+MailFrom = logwatch@$(hostname -f)
+Range = yesterday
+Detail = Medium
+Service = All
+mailer = "/usr/bin/mail -s 'Logwatch report for $(hostname)'"
+# Ignore less important services to reduce noise
+Service = "-zz-network"
+Service = "-zz-sys"
+Service = "-eximstats"
+EOF
+      
+      # Set up a daily cron job with random execution time to avoid server load spikes
+      echo "$(($RANDOM % 60)) $(($RANDOM % 5)) * * * /usr/sbin/logwatch" > /etc/cron.d/logwatch
+      chmod 644 /etc/cron.d/logwatch
+      
+      msg_ok "Logwatch installed and configured to send reports to $admin_email"
+      
+      # Save info for summary
+      mkdir -p "$TEMP_DIR/info"
+      cat > "$TEMP_DIR/info/logwatch.txt" << EOF
+Logwatch has been installed and configured.
+
+Daily reports will be sent to: $admin_email
+Report frequency: Daily (previous day's logs)
+Report
+# Function to clean up and complete setup
 finalize_setup() {
   msg_info "Finalizing setup..."
   
@@ -1019,61 +1102,6 @@ EOF
     fi
   else
     msg_info "Backup tool installation skipped"
-  fi
-}# Function to set up Logwatch
-setup_logwatch() {
-  if whiptail --title "Logwatch Setup" --yesno "Would you like to install and configure Logwatch for log monitoring?\n\nLogwatch provides daily system log analysis and reports." 10 70; then
-    msg_info "Installing Logwatch..."
-    
-    # Configure postfix noninteractively
-    configure_postfix_noninteractive
-    
-    apt install -y logwatch mailutils
-    
-    # Get admin email
-    admin_email=$(whiptail --inputbox "Enter email address for system reports:" 8 70 "admin@$(hostname -f)" 3>&1 1>&2 2>&3)
-    
-    if [[ $? -eq 0 && ! -z "$admin_email" ]]; then
-      # Create optimized configuration
-      mkdir -p /etc/logwatch/conf
-      cat > /etc/logwatch/conf/logwatch.conf << EOF
-# Logwatch configuration - Best practices
-Output = mail
-Format = html
-MailTo = $admin_email
-MailFrom = logwatch@$(hostname -f)
-Range = yesterday
-Detail = Medium
-Service = All
-mailer = "/usr/bin/mail -s 'Logwatch report for $(hostname)'"
-# Ignore less important services to reduce noise
-Service = "-zz-network"
-Service = "-zz-sys"
-Service = "-eximstats"
-EOF
-      
-      # Set up a daily cron job with random execution time to avoid server load spikes
-      echo "$(($RANDOM % 60)) $(($RANDOM % 5)) * * * /usr/sbin/logwatch" > /etc/cron.d/logwatch
-      chmod 644 /etc/cron.d/logwatch
-      
-      msg_ok "Logwatch installed and configured to send reports to $admin_email"
-      
-      # Save info for summary
-      mkdir -p "$TEMP_DIR/info"
-      cat > "$TEMP_DIR/info/logwatch.txt" << EOF
-Logwatch has been installed and configured.
-
-Daily reports will be sent to: $admin_email
-Report frequency: Daily (previous day's logs)
-Report format: HTML
-Detail level: Medium
-EOF
-    else
-      # Default configuration if no email provided
-      msg_info "Logwatch installed but not configured"
-    fi
-  else
-    msg_info "Logwatch setup skipped"
   fi
 }#!/usr/bin/env bash
 
@@ -1739,5 +1767,62 @@ install_monitor_benchmark_tools() {
     fi
   else
     msg_info "Monitoring tools installation skipped"
+  fi
+}
+
+# Function to set up Logwatch
+setup_logwatch() {
+  if whiptail --title "Logwatch Setup" --yesno "Would you like to install and configure Logwatch for log monitoring?\n\nLogwatch provides daily system log analysis and reports." 10 70; then
+    msg_info "Installing Logwatch..."
+    
+    # Configure postfix noninteractively
+    configure_postfix_noninteractive
+    
+    apt install -y logwatch mailutils
+    
+    # Get admin email
+    admin_email=$(whiptail --inputbox "Enter email address for system reports:" 8 70 "admin@$(hostname -f)" 3>&1 1>&2 2>&3)
+    
+    if [[ $? -eq 0 && ! -z "$admin_email" ]]; then
+      # Create optimized configuration
+      mkdir -p /etc/logwatch/conf
+      cat > /etc/logwatch/conf/logwatch.conf << EOF
+# Logwatch configuration - Best practices
+Output = mail
+Format = html
+MailTo = $admin_email
+MailFrom = logwatch@$(hostname -f)
+Range = yesterday
+Detail = Medium
+Service = All
+mailer = "/usr/bin/mail -s 'Logwatch report for $(hostname)'"
+# Ignore less important services to reduce noise
+Service = "-zz-network"
+Service = "-zz-sys"
+Service = "-eximstats"
+EOF
+      
+      # Set up a daily cron job with random execution time to avoid server load spikes
+      echo "$(($RANDOM % 60)) $(($RANDOM % 5)) * * * /usr/sbin/logwatch" > /etc/cron.d/logwatch
+      chmod 644 /etc/cron.d/logwatch
+      
+      msg_ok "Logwatch installed and configured to send reports to $admin_email"
+      
+      # Save info for summary
+      mkdir -p "$TEMP_DIR/info"
+      cat > "$TEMP_DIR/info/logwatch.txt" << EOF
+Logwatch has been installed and configured.
+
+Daily reports will be sent to: $admin_email
+Report frequency: Daily (previous day's logs)
+Report format: HTML
+Detail level: Medium
+EOF
+    else
+      # Default configuration if no email provided
+      msg_info "Logwatch installed but not configured"
+    fi
+  else
+    msg_info "Logwatch setup skipped"
   fi
 }
