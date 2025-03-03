@@ -6,11 +6,11 @@
 # License: MIT
 # Description: Sets up and optimizes Debian-based servers with essential tools
 
-# Define colors and formatting
+# Define colors and formatting with better contrast
 RD=$(echo -e "\033[01;31m")
-GN=$(echo -e "\033[1;92m")
+GN=$(echo -e "\033[0;32m")  # Changed to darker green for better contrast
 YW=$(echo -e "\033[33m")
-BL=$(echo -e "\033[1;34m")
+BL=$(echo -e "\033[0;34m")
 CL=$(echo -e "\033[m")
 CM="${GN}✓${CL}"
 CROSS="${RD}✗${CL}"
@@ -21,6 +21,9 @@ TEMP_DIR="/tmp/debian-express"
 STATE_FILE="$TEMP_DIR/installed-services.txt"
 mkdir -p "$TEMP_DIR"
 touch "$STATE_FILE"
+
+# Flag to track if Docker has been installed
+DOCKER_INSTALLED=false
 
 # Function to display success messages
 msg_ok() {
@@ -101,6 +104,18 @@ EOF
   echo -e "Part 1: System Setup & Optimization\n"
   echo -e "This script will help you configure, optimize, and install tools on your Debian-based server."
   echo -e "Run debian-express-secure.sh after this script to enable security features.\n"
+}
+
+# Preconfigure postfix to use local-only delivery and avoid interactive prompts
+configure_postfix_noninteractive() {
+  if ! dpkg -s postfix >/dev/null 2>&1; then
+    # Preconfigure postfix to avoid prompts
+    debconf-set-selections <<EOF
+postfix postfix/mailname string $(hostname -f)
+postfix postfix/main_mailer_type string 'Local only'
+EOF
+    msg_info "Pre-configured postfix for non-interactive installation"
+  fi
 }
 
 #########################
@@ -511,6 +526,9 @@ setup_management_panel() {
 setup_webmin() {
   msg_info "Installing Webmin..."
   
+  # Configure postfix noninteractively
+  configure_postfix_noninteractive
+  
   # Add Webmin repository and install
   curl -o setup-repos.sh https://raw.githubusercontent.com/webmin/webmin/master/setup-repos.sh
   sh setup-repos.sh
@@ -543,15 +561,39 @@ EOF
   fi
 }
 
+# Function for minimal Docker installation (to avoid duplicate prompts)
+setup_docker_minimal() {
+  # Only install if not already installed
+  if ! command -v docker >/dev/null; then
+    msg_info "Installing Docker (required dependency)..."
+    
+    # Install Docker using the official script
+    curl -fsSL https://get.docker.com | sh
+    
+    # Enable and start Docker service
+    systemctl enable --now docker
+    
+    # Install Docker Compose plugin
+    apt install -y docker-compose-plugin
+    
+    msg_ok "Docker installed successfully (as a dependency)"
+    
+    # Record docker service
+    record_installed_service "docker" "2375"
+    
+    # Mark Docker as installed
+    DOCKER_INSTALLED=true
+  else
+    msg_info "Docker already installed, continuing with setup"
+  fi
+}
+
 # Function to set up Easy Panel
 setup_easy_panel() {
   msg_info "Installing Easy Panel..."
   
-  # Check if Docker is installed
-  if ! command -v docker >/dev/null; then
-    msg_info "Docker is required for Easy Panel. Installing Docker..."
-    setup_docker
-  fi
+  # Check if Docker is installed and install if needed
+  setup_docker_minimal
   
   # Install Easy Panel
   curl -fsSL https://get.easypanel.io | sh
@@ -627,6 +669,10 @@ install_monitor_benchmark_tools() {
 setup_logwatch() {
   if whiptail --title "Logwatch Setup" --yesno "Would you like to install and configure Logwatch for log monitoring?\n\nLogwatch provides daily system log analysis and reports." 10 70; then
     msg_info "Installing Logwatch..."
+    
+    # Configure postfix noninteractively
+    configure_postfix_noninteractive
+    
     apt install -y logwatch mailutils
     
     # Get admin email
@@ -702,7 +748,8 @@ To configure backups later, you can use these commands:
   restic -r /path/to/repo snapshots
 
 • Restore files:
-  restic -r /path/to/repo restore latest --target /path/to/restore
+  restic -r /
+  path/to/repo restore latest --target /path/to/restore
 
 See 'man restic' for more details
 EOF
@@ -722,8 +769,12 @@ EOF
 setup_containers() {
   msg_info "Setting up container management..."
   
-  # Docker installation
-  setup_docker
+  # Docker installation (only if not already installed)
+  if [ "$DOCKER_INSTALLED" = false ]; then
+    setup_docker
+  else
+    msg_info "Docker already installed, skipping installation"
+  fi
   
   # Dockge (container manager) installation
   setup_dockge
@@ -759,8 +810,7 @@ setup_docker() {
         if [[ $? -eq 0 && ! -z "$selected_users" ]]; then
           for user in $(echo $selected_users | tr -d '"'); do
             usermod -aG docker $user
-            msg_ok "Added user $user
-            to the docker group"
+            msg_ok "Added user $user to the docker group"
           done
         fi
       fi
@@ -781,6 +831,9 @@ setup_docker() {
       echo "Docker has been installed successfully with Docker Compose plugin." > "$TEMP_DIR/info/docker.txt"
       echo "Users added to docker group can run Docker commands without sudo." >> "$TEMP_DIR/info/docker.txt"
       echo "Remember that users need to log out and back in for group changes to take effect." >> "$TEMP_DIR/info/docker.txt"
+      
+      # Mark Docker as installed
+      DOCKER_INSTALLED=true
     else
       msg_error "Docker installation failed"
     fi
