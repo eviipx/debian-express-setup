@@ -650,7 +650,6 @@ setup_netbird() {
       # Get Netbird IP and subnet
       netbird_ip=$(ip addr show netbird0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "Unknown")
       netbird_subnet=$(whiptail --inputbox "Enter your Netbird IP range (e.g., 100.92.0.0/16):" 8 70 "100.92.0.0/16" 3>&1 1>&2 2>&3)
-      
       # Save subnet for firewall rules
       echo "$netbird_subnet" > /tmp/vpn_subnet
       
@@ -665,3 +664,974 @@ setup_netbird() {
 
 # Function for additional system measures
 configure_additional_measures() {
+  msg_info "Configuring additional system measures..."
+  
+  # Automatic security updates
+  setup_auto_updates
+  
+  # System optimization
+  system_optimization
+  
+  # Disable unused services
+  disable_unused_services
+  
+  msg_ok "Additional system measures configured"
+}
+
+# Function to set up automatic security updates
+setup_auto_updates() {
+  if whiptail --title "Automatic Updates" --yesno "Would you like to configure automatic security updates?" 8 70; then
+    msg_info "Setting up unattended-upgrades..."
+    
+    # Install required packages
+    apt install -y unattended-upgrades apt-listchanges
+    
+    # Configure automatic updates
+    cat > /etc/apt/apt.conf.d/20auto-upgrades << EOF
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+EOF
+    
+    # Ask about automatic reboot if needed
+    if whiptail --title "Automatic Reboot" --yesno "Would you like to enable automatic reboot when necessary?\n\nThis will reboot the system automatically if an update requires it." 10 70; then
+      sed -i 's|//Unattended-Upgrade::Automatic-Reboot "false";|Unattended-Upgrade::Automatic-Reboot "true";|' /etc/apt/apt.conf.d/50unattended-upgrades
+      
+      # Ask about reboot time
+      reboot_time=$(whiptail --inputbox "Enter preferred reboot time (24-hour format, e.g., 02:00):" 8 70 "02:00" 3>&1 1>&2 2>&3)
+      if [[ $? -eq 0 && ! -z "$reboot_time" ]]; then
+        sed -i "s|//Unattended-Upgrade::Automatic-Reboot-Time \"02:00\";|Unattended-Upgrade::Automatic-Reboot-Time \"$reboot_time\";|" /etc/apt/apt.conf.d/50unattended-upgrades
+      fi
+      
+      msg_ok "Automatic reboot configured for $reboot_time"
+    else
+      sed -i 's|//Unattended-Upgrade::Automatic-Reboot "false";|Unattended-Upgrade::Automatic-Reboot "false";|' /etc/apt/apt.conf.d/50unattended-upgrades
+      msg_info "Automatic reboot not enabled"
+    fi
+    
+    # Restart unattended-upgrades service
+    systemctl restart unattended-upgrades
+    
+    msg_ok "Automatic security updates configured successfully"
+  else
+    msg_info "Automatic security updates not configured"
+  fi
+}
+
+# Function for system optimization
+system_optimization() {
+  if whiptail --title "System Optimization" --yesno "Would you like to apply system optimizations?" 8 70; then
+    
+    # Setup nohang to prevent system freezes
+    if whiptail --title "Nohang Installation" --yesno "Would you like to install nohang?\n\nNohang is a daemon that prevents system freezes caused by out-of-memory conditions." 10 70; then
+      msg_info "Installing nohang..."
+      
+      # Add repository and install nohang
+      add-apt-repository ppa:oibaf/test -y
+      apt update
+      apt install -y nohang
+      
+      # Enable and start nohang services
+      systemctl enable --now nohang-desktop.service
+      
+      msg_ok "Nohang installed and configured successfully"
+    else
+      msg_info "Nohang installation skipped"
+    fi
+    
+    # Setup swap file
+    setup_swap
+    
+    # I/O scheduler optimization
+    if whiptail --title "I/O Scheduler" --yesno "Would you like to optimize the I/O scheduler?\n\nThis can improve disk performance, especially for SSDs." 10 70; then
+      # Check for SSD
+      has_ssd=false
+      for drive in $(lsblk -d -o name | tail -n +2); do
+        if [ -d "/sys/block/$drive/queue/rotational" ]; then
+          if [ "$(cat /sys/block/$drive/queue/rotational)" -eq 0 ]; then
+            has_ssd=true
+          fi
+        fi
+      done
+      
+      if $has_ssd; then
+        # Optimize for SSD
+        cat > /etc/udev/rules.d/60-scheduler.rules << EOF
+# Set scheduler for SSD
+ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="deadline"
+# Set scheduler for HDD
+ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
+EOF
+        msg_ok "I/O scheduler optimized for SSDs and HDDs"
+      else
+        # Optimize for HDD only
+        cat > /etc/udev/rules.d/60-scheduler.rules << EOF
+# Set scheduler for HDD
+ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/scheduler}="bfq"
+EOF
+        msg_ok "I/O scheduler optimized for HDDs"
+      fi
+    fi
+    
+    # System kernel parameters optimization
+    if whiptail --title "Kernel Parameters" --yesno "Would you like to optimize kernel parameters?\n\nThis can improve system performance and network responsiveness." 10 70; then
+      cat > /etc/sysctl.d/99-performance.conf << EOF
+# Increase file system performance
+vm.dirty_ratio = 10
+vm.dirty_background_ratio = 5
+
+# Improve network performance
+net.core.somaxconn = 1024
+net.core.netdev_max_backlog = 5000
+net.ipv4.tcp_max_syn_backlog = 2048
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_tw_reuse = 1
+
+# Improve overall system responsiveness
+vm.swappiness = 10
+vm.vfs_cache_pressure = 50
+EOF
+      
+      # Apply changes
+      sysctl -p /etc/sysctl.d/99-performance.conf
+      
+      msg_ok "Kernel parameters optimized"
+    fi
+    
+    msg_ok "System optimization completed"
+  else
+    msg_info "System optimization skipped"
+  fi
+}
+
+# Swap file setup function based on RAM
+setup_swap() {
+  # Check if swap exists
+  swap_exists=0
+  swap_size=0
+  if [ "$(swapon --show | wc -l)" -gt 0 ]; then
+    swap_exists=1
+    swap_size=$(free -m | grep Swap | awk '{print $2}')
+  fi
+  
+  # Get system RAM
+  ram_size=$(free -m | grep Mem | awk '{print $2}')
+  
+  # Determine recommended swap size based on RAM
+  if [ $ram_size -lt 2048 ]; then
+    # Less than 2GB RAM: Swap = 2x RAM
+    recommended_swap=$((ram_size * 2))
+  elif [ $ram_size -le 8192 ]; then
+    # 2-8GB RAM: Swap = 1x RAM
+    recommended_swap=$ram_size
+  elif [ $ram_size -le 16384 ]; then
+    # 8-16GB RAM: Swap = 0.5x RAM (minimum 4GB)
+    recommended_swap=$((ram_size / 2))
+    if [ $recommended_swap -lt 4096 ]; then
+      recommended_swap=4096
+    fi
+  else
+    # >16GB RAM: 4GB swap
+    recommended_swap=4096
+  fi
+  
+  # Display swap information
+  if [ $swap_exists -eq 1 ]; then
+    swap_action=$(whiptail --title "Swap Configuration" --menu "Current swap: ${swap_size}MB, RAM: ${ram_size}MB\nRecommended swap: ${recommended_swap}MB\n\nWhat would you like to do?" 16 70 3 \
+      "KEEP" "Keep current swap configuration" \
+      "RESIZE" "Resize swap to recommended size (${recommended_swap}MB)" \
+      "CUSTOM" "Set a custom swap size" 3>&1 1>&2 2>&3)
+  else
+    swap_action=$(whiptail --title "Swap Configuration" --menu "No swap detected, RAM: ${ram_size}MB\nRecommended swap: ${recommended_swap}MB\n\nWhat would you like to do?" 16 70 3 \
+      "CREATE" "Create swap with recommended size (${recommended_swap}MB)" \
+      "CUSTOM" "Create swap with custom size" \
+      "NONE" "Do not create swap" 3>&1 1>&2 2>&3)
+  fi
+  
+  case "$swap_action" in
+    KEEP)
+      msg_info "Keeping current swap configuration"
+      ;;
+    RESIZE)
+      # Turn off existing swap
+      swapoff -a
+      # Resize the swap file
+      create_swap_file "${recommended_swap}"
+      ;;
+    CREATE)
+      create_swap_file "${recommended_swap}"
+      ;;
+    CUSTOM)
+      custom_size=$(whiptail --inputbox "Enter desired swap size in MB:" 8 60 "${recommended_swap}" 3>&1 1>&2 2>&3)
+      if [ $? -eq 0 ] && [ ! -z "$custom_size" ]; then
+        if [ $swap_exists -eq 1 ]; then
+          swapoff -a
+        fi
+        create_swap_file "${custom_size}"
+      else
+        msg_info "Swap configuration unchanged"
+      fi
+      ;;
+    NONE)
+      msg_info "No swap will be created"
+      ;;
+    *)
+      msg_info "Swap configuration unchanged"
+      ;;
+  esac
+}
+
+# Function to create and configure swap file
+create_swap_file() {
+  local size_mb=$1
+  
+  msg_info "Creating ${size_mb}MB swap file..."
+  
+  # Remove old swap file if it exists
+  if [ -f /swapfile ]; then
+    rm -f /swapfile
+  fi
+  
+  # Create new swap file
+  fallocate -l ${size_mb}M /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  
+  # Add to fstab if not already there
+  if ! grep -q "^/swapfile none swap" /etc/fstab; then
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  fi
+  
+  # Configure swappiness and cache pressure
+  echo 'vm.swappiness=10' > /etc/sysctl.d/99-swappiness.conf
+  echo 'vm.vfs_cache_pressure=50' >> /etc/sysctl.d/99-swappiness.conf
+  sysctl -p /etc/sysctl.d/99-swappiness.conf
+  
+  msg_ok "Swap file created and configured (${size_mb}MB)"
+}
+
+# Function to disable unused services
+disable_unused_services() {
+  if whiptail --title "Disable Unused Services" --yesno "Would you like to disable commonly unused services to save resources?" 8 70; then
+    # Track services we've configured
+    configured_services=""
+    if [ -f /tmp/configured_services ]; then
+      configured_services=$(cat /tmp/configured_services)
+    fi
+    
+    # Get list of services that can be safely disabled
+    services=$(systemctl list-unit-files --type=service --state=enabled --no-pager | grep -v "ssh\|network\|systemd\|dbus\|$configured_services" | awk '{print $1}' | grep "\.service$" | sed 's/\.service//g')
+    
+    # Format services for checklist - all pre-selected by default
+    service_options=""
+    for svc in $services; do
+      desc=$(systemctl show -p Description --value $svc 2>/dev/null || echo "No description available")
+      service_options="$service_options $svc \"$desc\" ON "  # Notice ON instead of OFF
+    done
+    
+    if [ -z "$service_options" ]; then
+      whiptail --title "No Services Available" --msgbox "No non-essential services were found that can be disabled." 8 70
+    else
+      disabled_services=$(whiptail --title "Select Services to Disable" --checklist \
+        "All non-essential services are selected by default.\nDeselect any services you want to keep:" 20 78 10 $service_options 3>&1 1>&2 2>&3)
+      
+      if [[ $? -eq 0 && ! -z "$disabled_services" ]]; then
+        for svc in $(echo $disabled_services | tr -d '"'); do
+          systemctl stop $svc
+          systemctl disable $svc
+          msg_ok "Service $svc stopped and disabled"
+        done
+        
+        msg_ok "Selected services have been disabled"
+      else
+        msg_info "No services were selected to disable"
+      fi
+    fi
+  else
+    msg_info "Service disabling skipped"
+  fi
+}
+
+# Function to set up monitoring and management tools
+setup_monitoring_benchmarking() {
+  msg_info "Setting up monitor and benchmark tools..."
+  
+  # Server Management Panel
+  setup_management_panel
+  
+  # Monitoring tools
+  setup_monitor_benchmark_tools
+  
+  # Logwatch configuration
+  setup_logwatch
+  
+  # Backup installation (simplified)
+  setup_backup_tool
+  
+  msg_ok "Monitor and benchmark tools configuration completed"
+}
+
+# Function to set up server management panel
+setup_management_panel() {
+  panel_choice=$(whiptail --title "Server Management Panel" --menu \
+    "Would you like to install a server management panel?" 15 60 3 \
+    "1" "Webmin (feature-rich, traditional)" \
+    "2" "Easy Panel (modern, container-focused)" \
+    "3" "Skip panel installation" 3>&1 1>&2 2>&3)
+  
+  case $panel_choice in
+    1)
+      setup_webmin
+      ;;
+    2)
+      setup_easy_panel
+      ;;
+    3)
+      msg_info "Server management panel installation skipped"
+      ;;
+    *)
+      msg_info "Server management panel installation skipped"
+      ;;
+  esac
+}
+
+# Function to set up Webmin
+setup_webmin() {
+  msg_info "Installing Webmin..."
+  
+  # Add Webmin repository and install
+  curl -o setup-repos.sh https://raw.githubusercontent.com/webmin/webmin/master/setup-repos.sh
+  sh setup-repos.sh
+  apt install -y webmin
+  
+  if [[ $? -eq 0 ]]; then
+    # Get server IP
+    server_ip=$(hostname -I | awk '{print $1}')
+    
+    # Check if firewall is enabled and add rule if needed
+    ufw_status=$(ufw status | head -1)
+    if [[ "$ufw_status" == *"active"* ]]; then
+      msg_info "Firewall is active. Adding rule for Webmin..."
+      ufw allow 10000/tcp comment 'Webmin'
+      msg_ok "Firewall rule added for Webmin (port 10000)"
+    fi
+    
+    msg_ok "Webmin installed successfully"
+    echo "webmin" >> /tmp/configured_services
+    
+    # Save info for summary
+    mkdir -p /tmp/debian-express-setup
+    cat > /tmp/debian-express-setup/webmin-info.txt << EOF
+Webmin has been installed successfully.
+
+You can access the Webmin interface at:
+https://$server_ip:10000
+
+Default login: Current system username/password
+EOF
+
+  else
+    msg_error "Webmin installation failed"
+  fi
+}
+
+# Function to set up Easy Panel
+setup_easy_panel() {
+  msg_info "Installing Easy Panel..."
+  
+  # Check if Docker is installed
+  if ! command -v docker >/dev/null; then
+    msg_info "Docker is required for Easy Panel. Installing Docker..."
+    curl -fsSL https://get.docker.com | sh
+    msg_ok "Docker installed"
+  fi
+  
+  # Install Easy Panel
+  curl -fsSL https://get.easypanel.io | sh
+  
+  if [[ $? -eq 0 ]]; then
+    # Get server IP
+    server_ip=$(hostname -I | awk '{print $1}')
+    
+    # Check if firewall is enabled and add rule if needed
+    ufw_status=$(ufw status | head -1)
+    if [[ "$ufw_status" == *"active"* ]]; then
+      msg_info "Firewall is active. Adding rule for Easy Panel..."
+      ufw allow 3000/tcp comment 'Easy Panel'
+      msg_ok "Firewall rule added for Easy Panel (port 3000)"
+    fi
+    
+    msg_ok "Easy Panel installed successfully"
+    echo "easypanel" >> /tmp/configured_services
+    
+    # Save info for summary
+    mkdir -p /tmp/debian-express-setup
+    cat > /tmp/debian-express-setup/easypanel-info.txt << EOF
+Easy Panel has been installed successfully.
+
+You can access the Easy Panel interface at:
+http://$server_ip:3000
+
+Follow the on-screen instructions to complete setup.
+EOF
+  else
+    msg_error "Easy Panel installation failed"
+  fi
+}
+
+# Function to set up monitoring tools
+setup_monitor_benchmark_tools() {
+  if whiptail --title "Monitor and Benchmark Tools" --yesno "Would you like to install system monitor and benchmark tools?" 8 70; then
+    monitoring_tools=$(whiptail --title "Monitor and Benchmark Tools" --checklist \
+      "Select tools to install:" 15 60 3 \
+      "btop" "Modern resource monitor" ON \
+      "speedtest-cli" "Internet speed test" ON \
+      "fastfetch" "System information display" ON 3>&1 1>&2 2>&3)
+    
+    if [[ $? -eq 0 && ! -z "$monitoring_tools" ]]; then
+      # Install selected tools
+      if [[ $monitoring_tools == *"btop"* ]]; then
+        msg_info "Installing btop..."
+        apt install -y btop
+        msg_ok "btop installed"
+      fi
+      
+      if [[ $monitoring_tools == *"speedtest-cli"* ]]; then
+        msg_info "Installing speedtest-cli..."
+        apt install -y speedtest-cli
+        msg_ok "speedtest-cli installed"
+      fi
+      
+      if [[ $monitoring_tools == *"fastfetch"* ]]; then
+        msg_info "Installing fastfetch..."
+        add-apt-repository ppa:zhangsongcui3371/fastfetch -y
+        apt update
+        apt install -y fastfetch
+        msg_ok "fastfetch installed"
+      fi
+      
+      msg_ok "Monitoring tools installed successfully"
+    else
+      msg_info "No monitoring tools selected"
+    fi
+  else
+    msg_info "Monitoring tools installation skipped"
+  fi
+}
+
+# Function to set up Logwatch with best practices
+setup_logwatch() {
+  if whiptail --title "Logwatch Setup" --yesno "Would you like to install and configure Logwatch for log monitoring?\n\nLogwatch provides daily system log analysis and reports." 10 70; then
+    msg_info "Installing Logwatch..."
+    apt install -y logwatch mailutils
+    
+    # Get admin email
+    admin_email=$(whiptail --inputbox "Enter email address for system reports:" 8 70 "admin@$(hostname -f)" 3>&1 1>&2 2>&3)
+    
+    if [[ $? -eq 0 && ! -z "$admin_email" ]]; then
+      # Create optimized configuration
+      mkdir -p /etc/logwatch/conf
+      cat > /etc/logwatch/conf/logwatch.conf << EOF
+# Logwatch configuration - Best practices
+Output = mail
+Format = html
+MailTo = $admin_email
+MailFrom = logwatch@$(hostname -f)
+Range = yesterday
+Detail = Medium
+Service = All
+mailer = "/usr/bin/mail -s 'Logwatch report for $(hostname)'"
+# Ignore less important services to reduce noise
+Service = "-zz-network"
+Service = "-zz-sys"
+Service = "-eximstats"
+EOF
+      
+      # Set up a daily cron job with random execution time to avoid server load spikes
+      echo "$(($RANDOM % 60)) $(($RANDOM % 5)) * * * /usr/sbin/logwatch" > /etc/cron.d/logwatch
+      chmod 644 /etc/cron.d/logwatch
+      
+      msg_ok "Logwatch installed and configured to send reports to $admin_email"
+      
+      # Save info for summary
+      mkdir -p /tmp/debian-express-setup
+      cat > /tmp/debian-express-setup/logwatch-info.txt << EOF
+Logwatch has been installed and configured.
+
+Daily reports will be sent to: $admin_email
+Report frequency: Daily (previous day's logs)
+Report format: HTML
+Detail level: Medium
+EOF
+    else
+      # Default configuration if no email provided
+      msg_info "Using default Logwatch configuration"
+    fi
+  else
+    msg_info "Logwatch setup skipped"
+  fi
+}
+
+# Simplified function to just install Restic backup tool
+setup_backup_tool() {
+  if whiptail --title "Backup Tool" --yesno "Would you like to install Restic backup tool?\n\nRestic is a modern, fast and secure backup program." 10 70; then
+    msg_info "Installing Restic backup tool..."
+    apt install -y restic
+    
+    if [[ $? -eq 0 ]]; then
+      msg_ok "Restic backup tool installed successfully"
+      
+      # Save information for final summary
+      mkdir -p /tmp/debian-express-setup
+      cat > /tmp/debian-express-setup/restic-info.txt << EOF
+Restic has been installed successfully.
+
+To configure backups later, you can use these commands:
+
+• Initialize a repository:
+  restic init --repo /path/to/repo
+
+• Create a backup:
+  restic -r /path/to/repo backup /path/to/files
+
+• List snapshots:
+  restic -r /path/to/repo snapshots
+
+• Restore files:
+  restic -r /path/to/repo restore latest --target /path/to/restore
+
+See 'man restic' for more details
+EOF
+    else
+      msg_error "Restic backup tool installation failed"
+    fi
+  else
+    msg_info "Backup tool installation skipped"
+  fi
+}
+
+# Function to set up container management
+setup_containers() {
+  msg_info "Setting up container management..."
+  
+  # Docker installation
+  setup_docker
+  
+  # Dockge (container manager) installation
+  setup_dockge
+  
+  msg_ok "Container management setup completed"
+}
+
+# Function to set up Docker
+setup_docker() {
+  if whiptail --title "Docker Installation" --yesno "Would you like to install Docker?\n\nDocker allows you to run applications in containers." 10 70; then
+    msg_info "Installing Docker..."
+    
+    # Install Docker using the official script
+    curl -fsSL https://get.docker.com | sh
+    
+    if [[ $? -eq 0 ]]; then
+      # Create docker group and add current non-root user if exists
+      groupadd -f docker
+      
+      # Get list of non-system users
+      users=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd | sort)
+      
+      # Format for whiptail checklist
+      user_options=""
+      for user in $users; do
+        user_options="$user_options $user $user OFF "
+      done
+      
+      if [[ ! -z "$user_options" ]]; then
+        selected_users=$(whiptail --title "Docker Access" --checklist \
+          "Select users to add to the docker group (allows running Docker without sudo):" 15 70 8 $user_options 3>&1 1>&2 2>&3)
+        
+        if [[ $? -eq 0 && ! -z "$selected_users" ]]; then
+          for user in $(echo $selected_users | tr -d '"'); do
+            usermod -aG docker $user
+            msg_ok "Added user $user to the docker group"
+          done
+        fi
+      fi
+      
+      # Enable and start Docker service
+      systemctl enable --now docker
+      
+      # Install Docker Compose plugin
+      apt install -y docker-compose-plugin
+      
+      msg_ok "Docker installed successfully"
+      echo "docker" >> /tmp/configured_services
+      
+      # Save Docker info for summary
+      mkdir -p /tmp/debian-express-setup
+      echo "Docker has been installed successfully with Docker Compose plugin." > /tmp/debian-express-setup/docker-info.txt
+      echo "Users added to docker group can run Docker commands without sudo." >> /tmp/debian-express-setup/docker-info.txt
+      echo "Remember that users need to log out and back in for group changes to take effect." >> /tmp/debian-express-setup/docker-info.txt
+    else
+      msg_error "Docker installation failed"
+    fi
+  else
+    msg_info "Docker installation skipped"
+  fi
+}
+
+# Function to set up Dockge (container manager)
+setup_dockge() {
+  # Only offer Dockge if Docker is installed
+  if command -v docker >/dev/null; then
+    if whiptail --title "Dockge Installation" --yesno "Would you like to install Dockge container manager?\n\nDockge is a modern UI for managing Docker Compose stacks." 10 70; then
+      msg_info "Installing Dockge..."
+      
+      # Create directory structure
+      mkdir -p /opt/stacks/dockge/data
+      cd /opt/stacks/dockge
+      
+      # Download docker-compose.yml
+      curl -fsSL https://github.com/louislam/dockge/releases/latest/download/docker-compose.yml -o docker-compose.yml
+      
+      # Set up admin password
+      admin_password=$(whiptail --passwordbox "Create a new admin password for Dockge:" 8 70 3>&1 1>&2 2>&3)
+      if [[ $? -eq 0 && ! -z "$admin_password" ]]; then
+        # Create .env file with password
+        echo "DOCKGE_ADMIN_PASSWORD=$admin_password" > .env
+      else
+        # Generate random password
+        random_password=$(openssl rand -base64 12)
+        echo "DOCKGE_ADMIN_PASSWORD=$random_password" > .env
+        msg_info "Generated random password: $random_password"
+      fi
+      
+      # Start Dockge
+      docker compose up -d
+      
+      if [[ $? -eq 0 ]]; then
+        # Get server IP
+        server_ip=$(hostname -I | awk '{print $1}')
+        
+        # Check if firewall is enabled and add rule if needed
+        ufw_status=$(ufw status | head -1)
+        if [[ "$ufw_status" == *"active"* ]]; then
+          msg_info "Firewall is active. Adding rule for Dockge..."
+          ufw allow 5001/tcp comment 'Dockge'
+          msg_ok "Firewall rule added for Dockge (port 5001)"
+        fi
+        
+        msg_ok "Dockge installed successfully"
+        echo "dockge" >> /tmp/configured_services
+        
+        # Save Dockge info for summary
+        mkdir -p /tmp/debian-express-setup
+        dockge_password=$(cat .env | grep DOCKGE_ADMIN_PASSWORD | cut -d= -f2)
+        cat > /tmp/debian-express-setup/dockge-info.txt << EOF
+Dockge container manager has been installed successfully.
+
+Access URL: http://$server_ip:5001
+Username: admin
+Password: $dockge_password
+
+Dockge allows you to easily manage Docker Compose stacks with a modern web interface.
+EOF
+      else
+        msg_error "Dockge installation failed"
+      fi
+    else
+      msg_info "Dockge installation skipped"
+    fi
+  else
+    msg_info "Docker not installed. Skipping Dockge installation."
+  fi
+}
+
+# Function to clean up and complete setup
+finalize_setup() {
+  msg_info "Finalizing setup..."
+  
+  # System cleanup
+  apt autoremove -y
+  apt clean
+  
+  # Generate and display the final summary
+  display_final_summary
+  
+  msg_ok "Debian Express Setup completed successfully!"
+  echo
+  echo "Your server has been configured according to your preferences."
+  echo "Please review the summary information provided."
+  echo
+  echo "For security reasons, you should reboot your server to apply all changes."
+  echo
+  read -p "Would you like to reboot now? (y/N): " reboot_choice
+  if [[ "$reboot_choice" =~ ^[Yy]$ ]]; then
+    echo "Rebooting system in 5 seconds..."
+    sleep 5
+    reboot
+  else
+    echo "Please remember to reboot your system manually later."
+  fi
+}
+
+# Function to display final setup summary
+display_final_summary() {
+  # Get server IP
+  server_ip=$(hostname -I | awk '{print $1}')
+  
+  # Build summary information
+  summary="=== Debian Express Setup Summary ===\n\n"
+  summary+="System Information:\n"
+  summary+="• Hostname: $(hostname)\n"
+  summary+="• IP Address: $server_ip\n"
+  summary+="• OS: $(lsb_release -ds)\n\n"
+  
+  # Check what was installed and configured
+  summary+="Security Configuration:\n"
+  
+  # SSH status
+  if [ -f /etc/ssh/sshd_config.d/50-security.conf ]; then
+    summary+="• SSH: Hardened configuration applied\n"
+    if grep -q "PasswordAuthentication no" /etc/ssh/sshd_config.d/50-security.conf; then
+      summary+="  - Password authentication: Disabled\n"
+    else
+      summary+="  - Password authentication: Enabled\n"
+    fi
+    if grep -q "PermitRootLogin no" /etc/ssh/sshd_config.d/50-security.conf; then
+      summary+="  - Root login: Disabled\n"
+    fi
+  else
+    summary+="• SSH: Standard configuration\n"
+  fi
+  
+  # Firewall status
+  ufw_status=$(ufw status | head -1)
+  if [[ "$ufw_status" == *"active"* ]]; then
+    summary+="• Firewall (UFW): Enabled\n
+    # Get firewall rules and format them
+    ufw_rules=$(ufw status | grep -v "Status:" | sed 's/^/    /')
+    summary+="  - Rules:\n$ufw_rules\n"
+  else
+    summary+="• Firewall (UFW): Disabled\n"
+  fi
+  
+  # Fail2Ban status
+  if systemctl is-active --quiet fail2ban; then
+    summary+="• Fail2Ban: Active\n"
+  else
+    summary+="• Fail2Ban: Not configured\n"
+  fi
+  
+  # Automatic updates
+  if [ -f /etc/apt/apt.conf.d/20auto-upgrades ]; then
+    summary+="• Automatic updates: Configured\n"
+  else
+    summary+="• Automatic updates: Not configured\n"
+  fi
+  
+  # VPN status
+  if systemctl is-active --quiet tailscale; then
+    summary+="• VPN: Tailscale active (IP: $(tailscale ip))\n"
+  elif systemctl is-active --quiet netbird; then
+    summary+="• VPN: Netbird active\n"
+  else
+    summary+="• VPN: Not configured\n"
+  fi
+  
+  # System optimization status
+  if [ -f /etc/sysctl.d/99-performance.conf ]; then
+    summary+="• System optimizations: Applied\n"
+  else
+    summary+="• System optimizations: Not applied\n"
+  fi
+  
+  # Swap status
+  swap_size=$(free -h | grep Swap | awk '{print $2}')
+  summary+="• Swap: $swap_size\n\n"
+  
+  # Installed services
+  summary+="Installed Services:\n"
+  
+  # Management panel
+  if systemctl is-active --quiet webmin; then
+    summary+="• Webmin: Installed and running\n"
+    summary+="  - URL: https://$server_ip:10000\n"
+  elif [ -d /opt/easypanel ]; then
+    summary+="• Easy Panel: Installed and running\n"
+    summary+="  - URL: http://$server_ip:3000\n"
+  else
+    summary+="• Management panel: Not installed\n"
+  fi
+  
+  # Docker status
+  if command -v docker >/dev/null; then
+    summary+="• Docker: Installed ($(docker --version | cut -d' ' -f3 | tr -d ','))\n"
+    
+    # Check if Dockge is installed
+    if docker ps | grep -q dockge; then
+      summary+="• Dockge container manager: Installed\n"
+      summary+="  - URL: http://$server_ip:5001\n"
+    else
+      summary+="• Dockge container manager: Not installed\n"
+    fi
+  else
+    summary+="• Docker: Not installed\n"
+  fi
+  
+  # Monitoring tools
+  tools=""
+  if command -v btop >/dev/null; then
+    tools+="btop "
+  fi
+  if command -v speedtest-cli >/dev/null; then
+    tools+="speedtest-cli "
+  fi
+  if command -v fastfetch >/dev/null; then
+    tools+="fastfetch "
+  fi
+  
+  if [ ! -z "$tools" ]; then
+    summary+="• Monitor and benchmark tools: $tools\n"
+  else
+    summary+="• Monitor and benchmark tools: None installed\n"
+  fi
+  
+  # Logwatch status
+  if [ -f /etc/logwatch/conf/logwatch.conf ]; then
+    admin_email=$(grep "MailTo" /etc/logwatch/conf/logwatch.conf | cut -d' ' -f3)
+    summary+="• Logwatch: Configured (Reports to: $admin_email)\n"
+  else
+    summary+="• Logwatch: Not configured\n"
+  fi
+  
+  # Restic status
+  if command -v restic >/dev/null; then
+    summary+="• Restic backup tool: Installed\n"
+  else
+    summary+="• Restic backup tool: Not installed\n"
+  fi
+  
+  # Add tool-specific information if available
+  summary+="\n=== Additional Information ===\n\n"
+  
+  # Add Restic info if installed
+  if command -v restic >/dev/null && [ -f /tmp/debian-express-setup/restic-info.txt ]; then
+    summary+="Restic Backup Tool Usage:\n"
+    summary+=$(cat /tmp/debian-express-setup/restic-info.txt)
+    summary+="\n\n"
+  fi
+  
+  # Add Docker info if installed
+  if command -v docker >/dev/null && [ -f /tmp/debian-express-setup/docker-info.txt ]; then
+    summary+="Docker Information:\n"
+    summary+=$(cat /tmp/debian-express-setup/docker-info.txt)
+    summary+="\n\n"
+  fi
+  
+  # Add Dockge info if installed
+  if docker ps 2>/dev/null | grep -q dockge && [ -f /tmp/debian-express-setup/dockge-info.txt ]; then
+    summary+="Dockge Information:\n"
+    summary+=$(cat /tmp/debian-express-setup/dockge-info.txt)
+    summary+="\n\n"
+  fi
+  
+  # Add Webmin info if installed
+  if systemctl is-active --quiet webmin && [ -f /tmp/debian-express-setup/webmin-info.txt ]; then
+    summary+="Webmin Information:\n"
+    summary+=$(cat /tmp/debian-express-setup/webmin-info.txt)
+    summary+="\n\n"
+  fi
+  
+  # Add Easy Panel info if installed
+  if [ -d /opt/easypanel ] && [ -f /tmp/debian-express-setup/easypanel-info.txt ]; then
+    summary+="Easy Panel Information:\n"
+    summary+=$(cat /tmp/debian-express-setup/easypanel-info.txt)
+    summary+="\n\n"
+  fi
+  
+  # Add Logwatch info if configured
+  if [ -f /etc/logwatch/conf/logwatch.conf ] && [ -f /tmp/debian-express-setup/logwatch-info.txt ]; then
+    summary+="Logwatch Information:\n"
+    summary+=$(cat /tmp/debian-express-setup/logwatch-info.txt)
+    summary+="\n\n"
+  fi
+  
+  # Display final summary
+  whiptail --title "Setup Complete" --scrolltext --msgbox "$summary" 24 78
+  
+  # Ask if user wants to save the summary to a file
+  if whiptail --title "Save Summary" --yesno "Would you like to save this summary to a file?" 8 60; then
+    summary_file="/root/debian-express-setup-summary.txt"
+    echo -e "$summary" > "$summary_file"
+    chmod 600 "$summary_file"
+    msg_ok "Summary saved to $summary_file"
+  fi
+  
+  # Clean up temporary files
+  rm -rf /tmp/debian-express-setup
+}
+
+# Main function to orchestrate the setup process
+main() {
+  # Check for root privileges
+  if [[ "$EUID" -ne 0 ]]; then
+    echo "This script must be run as root"
+    exit 1
+  fi
+  
+  # Display welcome banner
+  clear
+  cat <<"EOF"
+ ____       _     _                _____                              
+|  _ \  ___| |__ (_) __ _ _ __   | ____|_  ___ __  _ __ ___  ___ ___ 
+| | | |/ _ \ '_ \| |/ _` | '_ \  |  _| \ \/ / '_ \| '__/ _ \/ __/ __|
+| |_| |  __/ |_) | | (_| | | | | | |___ >  <| |_) | | |  __/\__ \__ \
+|____/ \___|_.__/|_|\__,_|_| |_| |_____/_/\_\ .__/|_|  \___||___/___/
+                                            |_|                      
+  ____       _               
+ / ___|  ___| |_ _   _ _ __  
+ \___ \ / _ \ __| | | | '_ \ 
+  ___) |  __/ |_| |_| | |_) |
+ |____/ \___|\__|\__,_| .__/ 
+                      |_|    
+EOF
+
+  echo -e "\n${BL}Welcome to Debian Express Setup!${CL}\n"
+  echo -e "This tool will help you quickly configure and secure your Debian-based server.\n"
+  
+  # Detect OS version
+  if [ -f /etc/debian_version ]; then
+    OS_VERSION=$(cat /etc/debian_version)
+    if [ -f /etc/lsb-release ]; then
+      OS_NAME="Ubuntu"
+      OS_PRETTY=$(lsb_release -ds)
+    else
+      OS_NAME="Debian"
+      OS_PRETTY="Debian ${OS_VERSION}"
+    fi
+    echo -e "Detected system: ${GN}${OS_PRETTY}${CL}\n"
+  else
+    msg_error "This script is designed for Debian-based systems only!"
+    exit 1
+  fi
+  
+  # Confirmation to proceed
+  if ! whiptail --title "Debian Express Setup" --yesno "This script will help you set up and secure your Debian-based server.\n\nDo you want to proceed?" 10 70; then
+    echo "Setup cancelled. No changes were made."
+    exit 0
+  fi
+  
+  # Create temp directory for script
+  mkdir -p /tmp/debian-express-setup
+  
+  # Process each main section in sequence
+  setup_core_configuration
+  configure_network_security
+  configure_additional_measures
+  setup_monitoring_benchmarking
+  setup_containers
+  finalize_setup
+}
+
+# Run the main function
+main "$@"
