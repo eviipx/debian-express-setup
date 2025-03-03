@@ -628,44 +628,399 @@ EOF
 # Function to set up monitoring tools
 install_monitor_benchmark_tools() {
   if whiptail --title "Monitor and Benchmark Tools" --yesno "Would you like to install system monitor and benchmark tools?" 8 70; then
-    monitoring_tools=$(whiptail --title "Monitor and Benchmark Tools" --checklist \
-      "Select tools to install:" 15 60 3 \
-      "btop" "Modern resource monitor" ON \
-      "speedtest-cli" "Internet speed test" ON \
-      "fastfetch" "System information display" ON 3>&1 1>&2 2>&3)
-    
-    if [[ $? -eq 0 && ! -z "$monitoring_tools" ]]; then
-      # Install selected tools
-      if [[ $monitoring_tools == *"btop"* ]]; then
-        msg_info "Installing btop..."
-        apt install -y btop
-        msg_ok "btop installed"
-      fi
-      
-      if [[ $monitoring_tools == *"speedtest-cli"* ]]; then
-        msg_info "Installing speedtest-cli..."
-        apt install -y speedtest-cli
-        msg_ok "speedtest-cli installed"
-      fi
-      
-      if [[ $monitoring_tools == *"fastfetch"* ]]; then
-        msg_info "Installing fastfetch..."
-        add-apt-repository ppa:zhangsongcui3371/fastfetch -y
-        apt update
-        apt install -y fastfetch
-        msg_ok "fastfetch installed"
-      fi
-      
-      msg_ok "Monitoring tools installed successfully"
-    else
-      msg_info "No monitoring tools selected"
-    fi
+  # Function to clean up and complete setup
+finalize_setup() {
+  msg_info "Finalizing setup..."
+  
+  # System cleanup
+  apt autoremove -y
+  apt clean
+  
+  # Generate and display the summary
+  display_summary
+  
+  msg_ok "Debian Express Setup completed successfully!"
+  echo
+  echo "Your server has been configured according to your preferences."
+  echo "Please run debian-express-secure.sh next to set up security features."
+  echo
+  echo "For best results, it's recommended to reboot your server before running the security script."
+  echo
+  read -p "Would you like to reboot now? (y/N): " reboot_choice
+  if [[ "$reboot_choice" =~ ^[Yy]$ ]]; then
+    echo "Rebooting system in 5 seconds..."
+    sleep 5
+    reboot
   else
-    msg_info "Monitoring tools installation skipped"
+    echo "Please remember to reboot your system manually before running the security script."
   fi
 }
 
-# Function to set up Logwatch
+# Main function to orchestrate the setup process
+main() {
+  check_root
+  check_debian_based
+  display_banner
+  detect_os
+  
+  # Confirmation to proceed
+  if ! whiptail --title "Debian Express Setup" --yesno "This script will help you set up and optimize your Debian-based server.\n\nDo you want to proceed?" 10 70; then
+    echo "Setup cancelled. No changes were made."
+    exit 0
+  fi
+  
+  # Core configuration
+  update_system
+  configure_hostname
+  configure_timezone
+  configure_locale
+  configure_root_password
+  configure_user
+  
+  # System optimization
+  optimize_system
+  
+  # Monitoring and management tools
+  setup_monitoring_tools
+  
+  # Container setup
+  setup_containers
+  
+  # Finalize setup
+  finalize_setup
+}
+
+# Run the main function
+main "$@"#########################
+# SUMMARY AND COMPLETION #
+#########################
+
+# Function to display system information summary
+display_summary() {
+  # Get server IP
+  server_ip=$(hostname -I | awk '{print $1}')
+  
+  # Build summary information
+  summary="=== Debian Express Setup Summary ===\n\n"
+  summary+="System Information:\n"
+  summary+="• Hostname: $(hostname)\n"
+  summary+="• IP Address: $server_ip\n"
+  summary+="• OS: $(lsb_release -ds)\n\n"
+  
+  # Swap status
+  swap_size=$(free -h | grep Swap | awk '{print $2}')
+  summary+="• Swap: $swap_size\n"
+  
+  # System optimization status
+  if [ -f /etc/sysctl.d/99-performance.conf ]; then
+    summary+="• System optimizations: Applied\n"
+  else
+    summary+="• System optimizations: Not applied\n"
+  fi
+  
+  # I/O scheduler status
+  if [ -f /etc/udev/rules.d/60-scheduler.rules ]; then
+    summary+="• I/O scheduler: Optimized\n"
+  else
+    summary+="• I/O scheduler: Default\n"
+  fi
+  
+  # Nohang status
+  if systemctl is-active --quiet nohang-desktop.service; then
+    summary+="• Nohang: Installed and active\n"
+  else
+    summary+="• Nohang: Not installed\n"
+  fi
+  
+  # Installed services
+  summary+="\nInstalled Services:\n"
+  
+  # Management panel - Check both Webmin and Easy Panel
+  if systemctl is-active --quiet webmin; then
+    summary+="• Webmin: Installed and running\n"
+    summary+="  - URL: https://$server_ip:10000\n"
+  elif [ -d /opt/easypanel ] || docker ps 2>/dev/null | grep -q "easypanel"; then
+    summary+="• Easy Panel: Installed and running\n"
+    summary+="  - URL: http://$server_ip:3000\n"
+  else
+    summary+="• Management panel: Not installed\n"
+  fi
+  
+  # Docker status
+  if command -v docker >/dev/null; then
+    # Store Docker version in a variable first to avoid nested command substitution
+    docker_version=$(docker --version | cut -d' ' -f3 | tr -d ',')
+    summary+="• Docker: Installed ($docker_version)\n"
+    
+    # Check if Dockge is installed - use Docker ps to verify
+    if docker ps 2>/dev/null | grep -q "dockge"; then
+      dockge_password=$(cat /opt/stacks/dockge/.env 2>/dev/null | grep DOCKGE_ADMIN_PASSWORD | cut -d= -f2 || echo "See installation details")
+      summary+="• Dockge container manager: Installed and running\n"
+      summary+="  - URL: http://$server_ip:5001\n"
+      summary+="  - Username: admin\n"
+      summary+="  - Password: $dockge_password\n"
+    else
+      summary+="• Dockge container manager: Not installed\n"
+    fi
+  else
+    summary+="• Docker: Not installed\n"
+  fi
+  
+  # Monitoring tools
+  tools=""
+  if command -v btop >/dev/null; then
+    tools+="btop "
+  fi
+  if command -v speedtest-cli >/dev/null; then
+    tools+="speedtest-cli "
+  fi
+  if command -v fastfetch >/dev/null; then
+    tools+="fastfetch "
+  fi
+  
+  if [ ! -z "$tools" ]; then
+    summary+="• Monitor and benchmark tools: $tools\n"
+  else
+    summary+="• Monitor and benchmark tools: None installed\n"
+  fi
+  
+  # Logwatch status - check for installed package rather than just config
+  if dpkg -l | grep -q logwatch; then
+    if [ -f /etc/logwatch/conf/logwatch.conf ]; then
+      admin_email=$(grep "MailTo" /etc/logwatch/conf/logwatch.conf | cut -d' ' -f3)
+      summary+="• Logwatch: Installed and configured (Reports to: $admin_email)\n"
+    else
+      summary+="• Logwatch: Installed (not configured)\n"
+    fi
+  else
+    summary+="• Logwatch: Not installed\n"
+  fi
+  
+  # Restic status
+  if command -v restic >/dev/null; then
+    summary+="• Restic backup tool: Installed\n"
+  else
+    summary+="• Restic backup tool: Not installed\n"
+  fi
+  
+  # Add tool-specific information
+  if [ -d "$TEMP_DIR/info" ]; then
+    summary+="\n=== Detailed Information ===\n\n"
+    
+    # Add Restic info if installed - simplified
+    if [ -f "$TEMP_DIR/info/restic.txt" ] && command -v restic >/dev/null; then
+      summary+="Restic Backup Tool:\n"
+      summary+="• Help: Run 'restic --help' for usage information\n"
+      summary+="• Initialize: restic init --repo /path/to/repo\n"
+      summary+="• Backup: restic -r /path/to/repo backup /path/to/files\n"
+      summary+="\n"
+    fi
+    
+    # Add Docker info if installed - with bullets
+    if [ -f "$TEMP_DIR/info/docker.txt" ] && command -v docker >/dev/null; then
+      summary+="Docker Information:\n"
+      summary+="• Docker and Docker Compose are installed\n"
+      summary+="• Added users can run Docker without sudo\n"
+      summary+="• Users need to log out and back in for group changes to take effect\n"
+      summary+="\n"
+    fi
+    
+    # Add other service info if needed...
+  fi
+  
+  # Display final summary
+  whiptail --title "Setup Complete" --scrolltext --msgbox "$summary" 24 78
+  
+  # Ask if user wants to save the summary to a file
+  if whiptail --title "Save Summary" --yesno "Would you like to save this summary to a file?" 8 60; then
+    summary_file="/root/debian-express-setup-summary.txt"
+    echo -e "$summary" > "$summary_file"
+    chmod 600 "$summary_file"
+    msg_ok "Summary saved to $summary_file"
+  fi
+}# Function to set up Dockge (container manager)
+setup_dockge() {
+  # Only offer Dockge if Docker is installed
+  if command -v docker >/dev/null; then
+    if whiptail --title "Dockge Installation" --yesno "Would you like to install Dockge container manager?\n\nDockge is a modern UI for managing Docker Compose stacks." 10 70; then
+      msg_info "Installing Dockge..."
+      
+      # Create directory structure
+      mkdir -p /opt/stacks/dockge/data
+      cd /opt/stacks/dockge
+      
+      # Download docker-compose.yml - Fixed URL using GitHub content URL
+      curl -fsSL https://raw.githubusercontent.com/louislam/dockge/master/compose.yaml -o docker-compose.yml
+      
+      # If the above URL fails, try the alternate URL
+      if [ ! -f docker-compose.yml ] || [ ! -s docker-compose.yml ]; then
+        curl -fsSL https://raw.githubusercontent.com/louislam/dockge/master/docker-compose.yml -o docker-compose.yml
+      fi
+      
+      # Set up admin password
+      admin_password=$(whiptail --passwordbox "Create a new admin password for Dockge:" 8 70 3>&1 1>&2 2>&3)
+      if [[ $? -eq 0 && ! -z "$admin_password" ]]; then
+        # Create .env file with password
+        echo "DOCKGE_ADMIN_PASSWORD=$admin_password" > .env
+      else
+        # Generate random password
+        random_password=$(openssl rand -base64 12)
+        echo "DOCKGE_ADMIN_PASSWORD=$random_password" > .env
+        msg_info "Generated random password: $random_password"
+      fi
+      
+      # Start Dockge
+      docker compose up -d
+      
+      if [[ $? -eq 0 ]]; then
+        # Get server IP
+        server_ip=$(hostname -I | awk '{print $1}')
+        dockge_port=5001
+        
+        msg_ok "Dockge installed successfully"
+        
+        # Record for firewall configuration
+        record_installed_service "dockge" "$dockge_port"
+        
+        # Save Dockge info for summary
+        mkdir -p "$TEMP_DIR/info"
+        dockge_password=$(cat .env | grep DOCKGE_ADMIN_PASSWORD | cut -d= -f2)
+        cat > "$TEMP_DIR/info/dockge.txt" << EOF
+Dockge container manager has been installed successfully.
+
+Access URL: http://$server_ip:$dockge_port
+Username: admin
+Password: $dockge_password
+
+Dockge allows you to easily manage Docker Compose stacks with a modern web interface.
+EOF
+
+        whiptail --title "Dockge Installed" --msgbox "Dockge has been installed successfully.\n\nYou can access the Dockge interface at:\nhttp://$server_ip:$dockge_port\n\nUsername: admin\nPassword: $dockge_password" 12 70
+      else
+        msg_error "Dockge installation failed"
+      fi
+    else
+      msg_info "Dockge installation skipped"
+    fi
+  else
+    msg_info "Docker not installed. Skipping Dockge installation."
+  fi
+}###########################
+# 4. CONTAINER MANAGEMENT #
+###########################
+
+# Function to set up Docker and container tools
+setup_containers() {
+  msg_info "Setting up container management..."
+  
+  # Docker installation (only if not already installed)
+  if [ "$DOCKER_INSTALLED" = false ]; then
+    setup_docker
+  else
+    msg_info "Docker already installed, skipping installation"
+  fi
+  
+  # Dockge (container manager) installation
+  setup_dockge
+  
+  msg_ok "Container management setup completed"
+}
+
+# Function to set up Docker
+setup_docker() {
+  if whiptail --title "Docker Installation" --yesno "Would you like to install Docker?\n\nDocker allows you to run applications in containers." 10 70; then
+    msg_info "Installing Docker..."
+    
+    # Install Docker using the official script
+    curl -fsSL https://get.docker.com | sh
+    
+    if [[ $? -eq 0 ]]; then
+      # Create docker group and add current non-root user if exists
+      groupadd -f docker
+      
+      # Get list of non-system users
+      users=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd | sort)
+      
+      # Format for whiptail checklist
+      user_options=""
+      for user in $users; do
+        user_options="$user_options $user $user OFF "
+      done
+      
+      if [[ ! -z "$user_options" ]]; then
+        selected_users=$(whiptail --title "Docker Access" --checklist \
+          "Select users to add to the docker group (allows running Docker without sudo):" 15 70 8 $user_options 3>&1 1>&2 2>&3)
+        
+        if [[ $? -eq 0 && ! -z "$selected_users" ]]; then
+          for user in $(echo $selected_users | tr -d '"'); do
+            usermod -aG docker $user
+            msg_ok "Added user $user to the docker group"
+          done
+        fi
+      fi
+      
+      # Enable and start Docker service
+      systemctl enable --now docker
+      
+      # Install Docker Compose plugin
+      apt install -y docker-compose-plugin
+      
+      msg_ok "Docker installed successfully"
+      
+      # Record docker service
+      record_installed_service "docker" "2375"
+      
+      # Save Docker info for summary
+      mkdir -p "$TEMP_DIR/info"
+      echo "Docker has been installed successfully with Docker Compose plugin." > "$TEMP_DIR/info/docker.txt"
+      echo "Users added to docker group can run Docker commands without sudo." >> "$TEMP_DIR/info/docker.txt"
+      echo "Remember that users need to log out and back in for group changes to take effect." >> "$TEMP_DIR/info/docker.txt"
+      
+      # Mark Docker as installed
+      DOCKER_INSTALLED=true
+    else
+      msg_error "Docker installation failed"
+    fi
+  else
+    msg_info "Docker installation skipped"
+  fi
+}# Simplified function to install Restic backup tool
+install_restic() {
+  if whiptail --title "Backup Tool" --yesno "Would you like to install Restic backup tool?\n\nRestic is a modern, fast and secure backup program." 10 70; then
+    msg_info "Installing Restic backup tool..."
+    apt install -y restic
+    
+    if [[ $? -eq 0 ]]; then
+      msg_ok "Restic backup tool installed successfully"
+      
+      # Save information for final summary
+      mkdir -p "$TEMP_DIR/info"
+      cat > "$TEMP_DIR/info/restic.txt" << EOF
+Restic has been installed successfully.
+
+To configure backups later, you can use these commands:
+
+• Initialize a repository:
+  restic init --repo /path/to/repo
+
+• Create a backup:
+  restic -r /path/to/repo backup /path/to/files
+
+• List snapshots:
+  restic -r /path/to/repo snapshots
+
+• Restore files:
+  restic -r /path/to/repo restore latest --target /path/to/restore
+
+See 'man restic' for more details
+EOF
+    else
+      msg_error "Restic backup tool installation failed"
+    fi
+  else
+    msg_info "Backup tool installation skipped"
+  fi
+}# Function to set up Logwatch
 setup_logwatch() {
   if whiptail --title "Logwatch Setup" --yesno "Would you like to install and configure Logwatch for log monitoring?\n\nLogwatch provides daily system log analysis and reports." 10 70; then
     msg_info "Installing Logwatch..."
@@ -720,57 +1075,7 @@ EOF
   else
     msg_info "Logwatch setup skipped"
   fi
-}
-
-# Simplified function to install Restic backup tool
-install_restic() {
-  if whiptail --title "Backup Tool" --yesno "Would you like to install Restic backup tool?\n\nRestic is a modern, fast and secure backup program." 10 70; then
-    msg_info "Installing Restic backup tool..."
-    apt install -y restic
-    
-    if [[ $? -eq 0 ]]; then
-      msg_ok "Restic backup tool installed successfully"
-      
-      # Save information for final summary
-      mkdir -p "$TEMP_DIR/info"
-      cat > "$TEMP_DIR/info/restic.txt" << EOF
-Restic has been installed successfully.
-
-To configure backups later, you can use these commands:
-
-• Initialize a repository:
-  restic init --repo /path/to/repo
-
-• Create a backup:
-  restic -r /path/to/repo backup /path/to/files
-
-• List snapshots:
-  restic -r /path/to/repo snapshots
-
-• Restore files:
-  restic -r /path/to/repo restore latest --target /path/to/restore
-
-See 'man restic' for more details
-EOF
-    else
-      msg_error "Restic backup tool installation failed"
-    fi
-  else
-    msg_info "Backup tool installation skipped"
-  fi
-}
-
-###########################
-# 4. CONTAINER MANAGEMENT #
-###########################
-
-# Function to set up Docker and container tools
-setup_containers() {
-  msg_info "Setting up container management..."
-  
-  # Docker installation (only if not already installed)
-  if [ "$DOCKER_INSTALLED"
-  #!/usr/bin/env bash
+}#!/usr/bin/env bash
 
 # Debian Express Setup
 # Part 1: System Setup & Optimization Script
@@ -1436,109 +1741,3 @@ install_monitor_benchmark_tools() {
     msg_info "Monitoring tools installation skipped"
   fi
 }
-
-# Function to set up Logwatch
-setup_logwatch() {
-  if whiptail --title "Logwatch Setup" --yesno "Would you like to install and configure Logwatch for log monitoring?\n\nLogwatch provides daily system log analysis and reports." 10 70; then
-    msg_info "Installing Logwatch..."
-    
-    # Configure postfix noninteractively
-    configure_postfix_noninteractive
-    
-    apt install -y logwatch mailutils
-    
-    # Get admin email
-    admin_email=$(whiptail --inputbox "Enter email address for system reports:" 8 70 "admin@$(hostname -f)" 3>&1 1>&2 2>&3)
-    
-    if [[ $? -eq 0 && ! -z "$admin_email" ]]; then
-      # Create optimized configuration
-      mkdir -p /etc/logwatch/conf
-      cat > /etc/logwatch/conf/logwatch.conf << EOF
-# Logwatch configuration - Best practices
-Output = mail
-Format = html
-MailTo = $admin_email
-MailFrom = logwatch@$(hostname -f)
-Range = yesterday
-Detail = Medium
-Service = All
-mailer = "/usr/bin/mail -s 'Logwatch report for $(hostname)'"
-# Ignore less important services to reduce noise
-Service = "-zz-network"
-Service = "-zz-sys"
-Service = "-eximstats"
-EOF
-      
-      # Set up a daily cron job with random execution time to avoid server load spikes
-      echo "$(($RANDOM % 60)) $(($RANDOM % 5)) * * * /usr/sbin/logwatch" > /etc/cron.d/logwatch
-      chmod 644 /etc/cron.d/logwatch
-      
-      msg_ok "Logwatch installed and configured to send reports to $admin_email"
-      
-      # Save info for summary
-      mkdir -p "$TEMP_DIR/info"
-      cat > "$TEMP_DIR/info/logwatch.txt" << EOF
-Logwatch has been installed and configured.
-
-Daily reports will be sent to: $admin_email
-Report frequency: Daily (previous day's logs)
-Report format: HTML
-Detail level: Medium
-EOF
-    else
-      # Default configuration if no email provided
-      msg_info "Logwatch installed but not configured"
-    fi
-  else
-    msg_info "Logwatch setup skipped"
-  fi
-}
-
-# Simplified function to install Restic backup tool
-install_restic() {
-  if whiptail --title "Backup Tool" --yesno "Would you like to install Restic backup tool?\n\nRestic is a modern, fast and secure backup program." 10 70; then
-    msg_info "Installing Restic backup tool..."
-    apt install -y restic
-    
-    if [[ $? -eq 0 ]]; then
-      msg_ok "Restic backup tool installed successfully"
-      
-      # Save information for final summary
-      mkdir -p "$TEMP_DIR/info"
-      cat > "$TEMP_DIR/info/restic.txt" << EOF
-Restic has been installed successfully.
-
-To configure backups later, you can use these commands:
-
-• Initialize a repository:
-  restic init --repo /path/to/repo
-
-• Create a backup:
-  restic -r /path/to/repo backup /path/to/files
-
-• List snapshots:
-  restic -r /path/to/repo snapshots
-
-• Restore files:
-  restic -r /path/to/repo restore latest --target /path/to/restore
-
-See 'man restic' for more details
-EOF
-    else
-      msg_error "Restic backup tool installation failed"
-    fi
-  else
-    msg_info "Backup tool installation skipped"
-  fi
-}
-
-###########################
-# 4. CONTAINER MANAGEMENT #
-###########################
-
-# Function to set up Docker and container tools
-setup_containers() {
-  msg_info "Setting up container management..."
-  
-  # Docker installation (only if not already installed)
-  if [ "$DOCKER_INSTALLED" = false ]; then
