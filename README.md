@@ -22,27 +22,7 @@ A comprehensive bash script for quickly setting up and securing Debian-based ser
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/yourusername/debian-express-setup/main/debian-express-setup.sh)"
-
-Option 2: Download, review, and run (recommended)
-
-# Update packages
-apt update && apt upgrade -y
-
-# Install curl if not already installed
-apt install -y curl
-
-# Download the script
-curl -fsSL -o debian-express-setup.sh https://raw.githubusercontent.com/yourusername/debian-express-setup/main/debian-express-setup.sh
-
-# Review the script (always review scripts before running them)
-less debian-express-setup.sh
-
-# Make it executable
-chmod +x debian-express-setup.sh
-
-# Run the script
-sudo ./debian-express-setup.sh
-
+```
 
 ### Option 2: Download, review, and run (recommended)
 
