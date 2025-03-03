@@ -25,12 +25,12 @@ For best results, run the scripts in order: first the setup script, then the sec
 
 ### Option 1: Run directly (for trusted environments)
 
-# Run the system setup script
+Run the system setup script
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/eviipx/debian-express-setup/main/debian-express-setup.sh)"
 ```
+Then run the security script
 ```bash
-# Then run the security script
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/eviipx/debian-express-setup/main/debian-express-secure.sh)"
 ```
 
