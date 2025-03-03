@@ -715,7 +715,7 @@ Detail level: Medium
 EOF
     else
       # Default configuration if no email provided
-      msg_info "Using default Logwatch configuration"
+      msg_info "Logwatch installed but not configured"
     fi
   else
     msg_info "Logwatch setup skipped"
@@ -748,8 +748,7 @@ To configure backups later, you can use these commands:
   restic -r /path/to/repo snapshots
 
 • Restore files:
-  restic -r /
-  path/to/repo restore latest --target /path/to/restore
+  restic -r /path/to/repo restore latest --target /path/to/restore
 
 See 'man restic' for more details
 EOF
@@ -767,6 +766,7 @@ EOF
 
 # Function to set up Docker and container tools
 setup_containers() {
+  msg_info "
   msg_info "Setting up container management..."
   
   # Docker installation (only if not already installed)
@@ -853,8 +853,13 @@ setup_dockge() {
       mkdir -p /opt/stacks/dockge/data
       cd /opt/stacks/dockge
       
-      # Download docker-compose.yml
-      curl -fsSL https://github.com/louislam/dockge/releases/latest/download/docker-compose.yml -o docker-compose.yml
+      # Download docker-compose.yml - Fixed URL using GitHub content URL
+      curl -fsSL https://raw.githubusercontent.com/louislam/dockge/master/compose.yaml -o docker-compose.yml
+      
+      # If the above URL fails, try the alternate URL
+      if [ ! -f docker-compose.yml ] || [ ! -s docker-compose.yml ]; then
+        curl -fsSL https://raw.githubusercontent.com/louislam/dockge/master/docker-compose.yml -o docker-compose.yml
+      fi
       
       # Set up admin password
       admin_password=$(whiptail --passwordbox "Create a new admin password for Dockge:" 8 70 3>&1 1>&2 2>&3)
@@ -950,11 +955,11 @@ display_summary() {
   # Installed services
   summary+="\nInstalled Services:\n"
   
-  # Management panel
+  # Management panel - Check both Webmin and Easy Panel
   if systemctl is-active --quiet webmin; then
     summary+="• Webmin: Installed and running\n"
     summary+="  - URL: https://$server_ip:10000\n"
-  elif [ -d /opt/easypanel ]; then
+  elif [ -d /opt/easypanel ] || docker ps 2>/dev/null | grep -q "easypanel"; then
     summary+="• Easy Panel: Installed and running\n"
     summary+="  - URL: http://$server_ip:3000\n"
   else
@@ -965,10 +970,13 @@ display_summary() {
   if command -v docker >/dev/null; then
     summary+="• Docker: Installed ($(docker --version | cut -d' ' -f3 | tr -d ','))\n"
     
-    # Check if Dockge is installed
-    if docker ps | grep -q dockge; then
-      summary+="• Dockge container manager: Installed\n"
+    # Check if Dockge is installed - use Docker ps to verify
+    if docker ps 2>/dev/null | grep -q "dockge"; then
+      dockge_password=$(cat /opt/stacks/dockge/.env 2>/dev/null | grep DOCKGE_ADMIN_PASSWORD | cut -d= -f2 || echo "See installation details")
+      summary+="• Dockge container manager: Installed and running\n"
       summary+="  - URL: http://$server_ip:5001\n"
+      summary+="  - Username: admin\n"
+      summary+="  - Password: $dockge_password\n"
     else
       summary+="• Dockge container manager: Not installed\n"
     fi
@@ -994,12 +1002,16 @@ display_summary() {
     summary+="• Monitor and benchmark tools: None installed\n"
   fi
   
-  # Logwatch status
-  if [ -f /etc/logwatch/conf/logwatch.conf ]; then
-    admin_email=$(grep "MailTo" /etc/logwatch/conf/logwatch.conf | cut -d' ' -f3)
-    summary+="• Logwatch: Configured (Reports to: $admin_email)\n"
+  # Logwatch status - check for installed package rather than just config
+  if dpkg -l | grep -q logwatch; then
+    if [ -f /etc/logwatch/conf/logwatch.conf ]; then
+      admin_email=$(grep "MailTo" /etc/logwatch/conf/logwatch.conf | cut -d' ' -f3)
+      summary+="• Logwatch: Installed and configured (Reports to: $admin_email)\n"
+    else
+      summary+="• Logwatch: Installed (not configured)\n"
+    fi
   else
-    summary+="• Logwatch: Not configured\n"
+    summary+="• Logwatch: Not installed\n"
   fi
   
   # Restic status
@@ -1009,55 +1021,29 @@ display_summary() {
     summary+="• Restic backup tool: Not installed\n"
   fi
   
-  # Add next steps
-  summary+="\n=== Next Steps ===\n"
-  summary+="Run debian-express-secure.sh to configure security features.\n"
-  
-  # Add tool-specific information if available
+  # Add tool-specific information
   if [ -d "$TEMP_DIR/info" ]; then
     summary+="\n=== Detailed Information ===\n\n"
     
-    # Add Restic info if installed
-    if [ -f "$TEMP_DIR/info/restic.txt" ]; then
+    # Add Restic info if installed - simplified
+    if [ -f "$TEMP_DIR/info/restic.txt" ] && command -v restic >/dev/null; then
       summary+="Restic Backup Tool:\n"
-      summary+=$(cat "$TEMP_DIR/info/restic.txt")
-      summary+="\n\n"
+      summary+="• Help: Run 'restic --help' for usage information\n"
+      summary+="• Initialize: restic init --repo /path/to/repo\n"
+      summary+="• Backup: restic -r /path/to/repo backup /path/to/files\n"
+      summary+="\n"
     fi
     
-    # Add Docker info if installed
-    if [ -f "$TEMP_DIR/info/docker.txt" ]; then
+    # Add Docker info if installed - with bullets
+    if [ -f "$TEMP_DIR/info/docker.txt" ] && command -v docker >/dev/null; then
       summary+="Docker Information:\n"
-      summary+=$(cat "$TEMP_DIR/info/docker.txt")
-      summary+="\n\n"
+      summary+="• Docker and Docker Compose are installed\n"
+      summary+="• Added users can run Docker without sudo\n"
+      summary+="• Users need to log out and back in for group changes to take effect\n"
+      summary+="\n"
     fi
     
-    # Add Dockge info if installed
-    if [ -f "$TEMP_DIR/info/dockge.txt" ]; then
-      summary+="Dockge Information:\n"
-      summary+=$(cat "$TEMP_DIR/info/dockge.txt")
-      summary+="\n\n"
-    fi
-    
-    # Add Webmin info if installed
-    if [ -f "$TEMP_DIR/info/webmin.txt" ]; then
-      summary+="Webmin Information:\n"
-      summary+=$(cat "$TEMP_DIR/info/webmin.txt")
-      summary+="\n\n"
-    fi
-    
-    # Add Easy Panel info if installed
-    if [ -f "$TEMP_DIR/info/easypanel.txt" ]; then
-      summary+="Easy Panel Information:\n"
-      summary+=$(cat "$TEMP_DIR/info/easypanel.txt")
-      summary+="\n\n"
-    fi
-    
-    # Add Logwatch info if configured
-    if [ -f "$TEMP_DIR/info/logwatch.txt" ]; then
-      summary+="Logwatch Information:\n"
-      summary+=$(cat "$TEMP_DIR/info/logwatch.txt")
-      summary+="\n\n"
-    fi
+    # Add other service info if needed...
   fi
   
   # Display final summary
