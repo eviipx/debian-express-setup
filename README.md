@@ -34,6 +34,8 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/eviipx/debian-express-se
 ```
 
 ### Option 2: Download, review, and run (recommended)
+
+```bash
 # Update packages
 apt update && apt upgrade -y
 
