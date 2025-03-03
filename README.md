@@ -1,46 +1,58 @@
 # Debian Express Setup
 
-A comprehensive bash script for quickly setting up and securing Debian-based servers and VPS instances.
+A comprehensive set of scripts for quickly setting up, optimizing, and securing Debian-based servers and VPS instances.
 
 ## Features
 
-- **Core System Configuration**: Update packages, set hostname, timezone, locale, and swap
-- **User Management**: Create non-root users, configure sudo access
+This project consists of two complementary scripts that work together:
+
+### Script 1: debian-express-setup.sh (System Setup & Optimization)
+- **Core System Configuration**: Update packages, set hostname, timezone, locale
+- **System Optimization**: Configure swap, I/O scheduler, kernel parameters
+- **Management Tools**: Install Webmin/Easy Panel, monitoring tools
+- **Container Support**: Set up Docker and Dockge container manager
+
+### Script 2: debian-express-secure.sh (Security & Network)
 - **SSH Hardening**: Configure SSH keys, disable root login, and more
-- **Firewall Setup**: Configure UFW with secure defaults
-- **Brute Force Protection**: Install and configure Fail2Ban
-- **VPN Integration**: Set up Tailscale or Netbird for secure remote access
-- **System Optimization**: Configure performance parameters
-- **Monitoring Tools**: Install btop, speedtest-cli, and more
-- **Log Management**: Set up Logwatch for daily reports
-- **Container Support**: Install Docker and Dockge (container management UI)
-- **Backup Tools**: Install Restic for backups
+- **Firewall Setup**: Configure UFW with automatic detection of installed services
+- **Intrusion Prevention**: Set up Fail2Ban to block brute force attempts
+- **VPN Integration**: Configure Tailscale or Netbird for secure remote access
+- **Automatic Updates**: Schedule security updates and optional reboots
 
 ## Quick Start
+
+For best results, run the scripts in order: first the setup script, then the security script.
 
 ### Option 1: Run directly (for trusted environments)
 
 ```bash
+# Run the system setup script
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/eviipx/debian-express-setup/main/debian-express-setup.sh)"
+
+# Then run the security script
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/eviipx/debian-express-setup/main/debian-express-secure.sh)"
 ```
 
 ### Option 2: Download, review, and run (recommended)
-
-```bash
 # Update packages
 apt update && apt upgrade -y
 
 # Install curl if not already installed
 apt install -y curl
 
-# Download the script
+# Download the scripts
 curl -fsSL -o debian-express-setup.sh https://raw.githubusercontent.com/eviipx/debian-express-setup/main/debian-express-setup.sh
+curl -fsSL -o debian-express-secure.sh https://raw.githubusercontent.com/eviipx/debian-express-setup/main/debian-express-secure.sh
 
-# Review the script (always review scripts before running them)
+# Review the scripts before running (recommended)
 less debian-express-setup.sh
+less debian-express-secure.sh
 
-# Make it executable
-chmod +x debian-express-setup.sh
+# Make the scripts executable
+chmod +x debian-express-setup.sh debian-express-secure.sh
 
-# Run the script
+# Run the system setup script
 sudo ./debian-express-setup.sh
+
+# After the system setup completes (and optionally rebooting), run the security script
+sudo ./debian-express-secure.sh
