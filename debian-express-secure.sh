@@ -623,7 +623,7 @@ setup_fail2ban() {
     
     # Always include localhost
     whitelist_ips="127.0.0.1 ::1"
-    if [[ ! -z "$additional_ips" ]]; then
+    if [[ -n "$additional_ips" ]]; then
       whitelist_ips="$whitelist_ips $additional_ips"
     fi
     
@@ -654,6 +654,7 @@ EOF
     msg_ok "Fail2Ban installed and configured"
     
     # Save the command for adding VPN subnet to whitelist for later
+    mkdir -p "$TEMP_DIR"
     echo "To add a VPN subnet to the Fail2Ban whitelist later, use:" > "$TEMP_DIR/fail2ban_vpn.txt"
     echo "sudo fail2ban-client set sshd addignoreip VPN_SUBNET" >> "$TEMP_DIR/fail2ban_vpn.txt"
     echo "# Example: sudo fail2ban-client set sshd addignoreip 10.8.0.0/24" >> "$TEMP_DIR/fail2ban_vpn.txt"
@@ -717,7 +718,7 @@ setup_tailscale() {
       echo
     fi
     
-    if [[ ! -z "$auth_key" ]]; then
+    if [[ -n "$auth_key" ]]; then
       tailscale up --authkey="$auth_key"
       msg_ok "Tailscale configured with auth key"
     else
@@ -781,7 +782,7 @@ setup_netbird() {
     read -r setup_key
     echo
     
-    if [[ ! -z "$setup_key" ]]; then
+    if [[ -n "$setup_key" ]]; then
       netbird up --setup-key "$setup_key"
       msg_ok "Netbird configured with setup key"
       
@@ -796,7 +797,7 @@ setup_netbird() {
       # Save command for allowing VPN subnet in firewall for later
       mkdir -p "$TEMP_DIR"
       echo "# To allow traffic from the Netbird VPN subnet in UFW:" > "$TEMP_DIR/vpn_firewall.txt"
-      echo "sudo ufw allow from $netbird_subnet comment 'Netbird VPN subnet'" >> "$TEMP_DIR/
+      echo "sudo ufw allow from $netbird_subnet comment 'Netbird VPN subnet'" >> "$TEMP_DIR/vpn_firewall
       ##############################
 # 5. AUTOMATIC SECURITY UPDATES
 ##############################
@@ -1679,7 +1680,7 @@ setup_fail2ban() {
     
     # Always include localhost
     whitelist_ips="127.0.0.1 ::1"
-    if [[ ! -z "$additional_ips" ]]; then
+    if [[ -n "$additional_ips" ]]; then
       whitelist_ips="$whitelist_ips $additional_ips"
     fi
     
@@ -1710,6 +1711,7 @@ EOF
     msg_ok "Fail2Ban installed and configured"
     
     # Save the command for adding VPN subnet to whitelist for later
+    mkdir -p "$TEMP_DIR"
     echo "To add a VPN subnet to the Fail2Ban whitelist later, use:" > "$TEMP_DIR/fail2ban_vpn.txt"
     echo "sudo fail2ban-client set sshd addignoreip VPN_SUBNET" >> "$TEMP_DIR/fail2ban_vpn.txt"
     echo "# Example: sudo fail2ban-client set sshd addignoreip 10.8.0.0/24" >> "$TEMP_DIR/fail2ban_vpn.txt"
@@ -1773,7 +1775,7 @@ setup_tailscale() {
       echo
     fi
     
-    if [[ ! -z "$auth_key" ]]; then
+    if [[ -n "$auth_key" ]]; then
       tailscale up --authkey="$auth_key"
       msg_ok "Tailscale configured with auth key"
     else
@@ -1837,7 +1839,7 @@ setup_netbird() {
     read -r setup_key
     echo
     
-    if [[ ! -z "$setup_key" ]]; then
+    if [[ -n "$setup_key" ]]; then
       netbird up --setup-key "$setup_key"
       msg_ok "Netbird configured with setup key"
       
@@ -1852,4 +1854,36 @@ setup_netbird() {
       # Save command for allowing VPN subnet in firewall for later
       mkdir -p "$TEMP_DIR"
       echo "# To allow traffic from the Netbird VPN subnet in UFW:" > "$TEMP_DIR/vpn_firewall.txt"
-      echo "sudo ufw allow from $netbird_subnet comment 'Netbird VPN subnet'" >> "$TEMP_DIR/
+      echo "sudo ufw allow from $netbird_subnet comment 'Netbird VPN subnet'" >> "$TEMP_DIR/vpn_firewall.txt"
+      
+      # Create info file for summary
+      mkdir -p "$TEMP_DIR/info"
+      cat > "$TEMP_DIR/info/netbird.txt" << EOF
+Netbird VPN has been configured successfully.
+
+Your Netbird IP: $netbird_ip
+Netbird subnet: $netbird_subnet
+
+You can now connect to this server securely via the Netbird network.
+
+To allow all traffic from the Netbird subnet in your firewall:
+sudo ufw allow from $netbird_subnet comment 'Netbird VPN subnet'
+
+To add the Netbird subnet to Fail2Ban whitelist:
+sudo fail2ban-client set sshd addignoreip $netbird_subnet
+EOF
+
+      echo "Netbird has been successfully configured."
+      echo
+      echo -e "Your Netbird IP: ${HIGHLIGHT}$netbird_ip${CL}"
+      echo -e "Netbird subnet: ${HIGHLIGHT}$netbird_subnet${CL}"
+      echo
+      echo "You can now connect to this server securely via the Netbird network."
+      echo
+    else
+      msg_error "Netbird setup key not provided"
+    fi
+  else
+    msg_error "Netbird installation failed"
+  fi
+}
