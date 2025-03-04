@@ -693,10 +693,12 @@ configure_firewall() {
           for port in "${PORT_ARRAY[@]}"; do
             ufw allow $port/tcp comment "$description"
             msg_ok "Port $port/tcp allowed: $description"
-          elif [[ $protocol == "udp" ]]; then
+          fi
+          if [ "$protocol" = "udp" ]; then
             ufw allow $port/udp comment "$description"
             msg_ok "Port $port/udp allowed: $description"
-          else
+          fi
+          if [ "$protocol" = "both" ]; then
             ufw allow $port comment "$description"
             msg_ok "Port $port (tcp & udp) allowed: $description"
           fi
@@ -1152,7 +1154,7 @@ main() {
 }
 
 # Run the main function
-main "$@" allow "$port"/tcp comment "$service"
+main "$@" "$port"/tcp comment "$service"
             msg_ok "Added rule for $service (Port $port)"
           done
         done
@@ -1180,16 +1182,17 @@ main "$@" allow "$port"/tcp comment "$service"
           read -r proto_selection
           echo
           
-          case $proto_selection in
-            1) protocol="tcp" ;;
-            2) protocol="udp" ;;
-            3) protocol="both" ;;
-            *) protocol="tcp" ;;
-          esac
+          protocol="tcp"
+          if [ "$proto_selection" = "2" ]; then
+            protocol="udp"
+          fi
+          if [ "$proto_selection" = "3" ]; then
+            protocol="both"
+          fi
           
           echo -n "Enter a description for this rule: "
           read -r description
           echo
           
-          if [[ $protocol == "tcp" ]]; then
-            ufw
+          if [ "$protocol" = "tcp" ]; then
+            ufw allow
