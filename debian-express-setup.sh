@@ -58,7 +58,7 @@ get_yes_no() {
   local response
   
   while true; do
-    echo -e -n "${prompt} (${GN}y${CL}/${RD}n${CL}): "
+    echo -e -n "${prompt} (${HIGHLIGHT}y${CL}/${HIGHLIGHT}n${CL}): "
     read -r response
     case $response in
       [Yy]* ) echo; return 0 ;;
