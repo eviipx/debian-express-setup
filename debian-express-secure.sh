@@ -691,15 +691,47 @@ configure_firewall() {
           # Add multiple port entries if comma-separated
           IFS=',' read -ra PORT_ARRAY <<< "$ports"
           for port in "${PORT_ARRAY[@]}"; do
-            ufw allow $port/tcp comment "$description"
+            ufw allow "$port"/tcp comment "$service"
+            msg_ok "Added rule for $service (Port $port)"
+          done
+        done
+      fi
+    fi
+    
+    # Ask about custom port
+    if get_yes_no "Do you want to allow any custom ports?"; then
+      while true; do
+        echo -n "Enter port number to allow (1-65535): "
+        read -r port
+        echo
+        
+        if [[ -z "$port" ]]; then
+          break
+        fi
+        
+        if [[ $port =~ ^[0-9]+$ && $port -ge 1 && $port -le 65535 ]]; then
+          echo "Select protocol:"
+          echo -e "${HIGHLIGHT}1${CL}) TCP only"
+          echo -e "${HIGHLIGHT}2${CL}) UDP only"
+          echo -e "${HIGHLIGHT}3${CL}) Both TCP and UDP"
+          echo
+          echo -n "Enter your selection [1-3]: "
+          read -r proto_selection
+          echo
+          
+          echo -n "Enter a description for this rule: "
+          read -r description
+          echo
+          
+          # Set up firewall rules based on protocol selection
+          if [ "$proto_selection" = "1" ]; then
+            ufw allow "$port"/tcp comment "$description"
             msg_ok "Port $port/tcp allowed: $description"
-          fi
-          if [ "$protocol" = "udp" ]; then
-            ufw allow $port/udp comment "$description"
+          elif [ "$proto_selection" = "2" ]; then
+            ufw allow "$port"/udp comment "$description"
             msg_ok "Port $port/udp allowed: $description"
-          fi
-          if [ "$protocol" = "both" ]; then
-            ufw allow $port comment "$description"
+          else
+            ufw allow "$port" comment "$description"
             msg_ok "Port $port (tcp & udp) allowed: $description"
           fi
         else
@@ -1154,45 +1186,4 @@ main() {
 }
 
 # Run the main function
-main "$@" "$port"/tcp comment "$service"
-            msg_ok "Added rule for $service (Port $port)"
-          done
-        done
-      fi
-    fi
-    
-    # Ask about custom port
-    if get_yes_no "Do you want to allow any custom ports?"; then
-      while true; do
-        echo -n "Enter port number to allow (1-65535): "
-        read -r port
-        echo
-        
-        if [[ -z "$port" ]]; then
-          break
-        fi
-        
-        if [[ $port =~ ^[0-9]+$ && $port -ge 1 && $port -le 65535 ]]; then
-          echo "Select protocol:"
-          echo -e "${HIGHLIGHT}1${CL}) TCP only"
-          echo -e "${HIGHLIGHT}2${CL}) UDP only"
-          echo -e "${HIGHLIGHT}3${CL}) Both TCP and UDP"
-          echo
-          echo -n "Enter your selection [1-3]: "
-          read -r proto_selection
-          echo
-          
-          protocol="tcp"
-          if [ "$proto_selection" = "2" ]; then
-            protocol="udp"
-          fi
-          if [ "$proto_selection" = "3" ]; then
-            protocol="both"
-          fi
-          
-          echo -n "Enter a description for this rule: "
-          read -r description
-          echo
-          
-          if [ "$protocol" = "tcp" ]; then
-            ufw allow
+main "$@"
