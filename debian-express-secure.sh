@@ -42,13 +42,14 @@ msg_error() {
   echo
 }
 
-# Function to get yes/no input from user
+# Function to get yes/no input from user - FIXED to prevent syntax errors
 get_yes_no() {
   local prompt="$1"
   local response
   
   while true; do
-    echo -e -n "${prompt} (${HIGHLIGHT}y${CL}/${HIGHLIGHT}n${CL}): "
+    # Fixed line to escape parentheses properly
+    echo -e -n "${prompt} [${HIGHLIGHT}y${CL}/${HIGHLIGHT}n${CL}]: "
     read -r response
     case $response in
       [Yy]* ) echo; return 0 ;;
