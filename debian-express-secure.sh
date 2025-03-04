@@ -137,7 +137,7 @@ detect_services() {
   # Track services we've already seen to prevent duplicates
   declare -A seen_services
   
-  # Read from the state file created by the setup script
+  # Read from the state file created by the setup script (if it exists)
   if [ -f "$STATE_FILE" ]; then
     while IFS=: read -r service port; do
       if [ -n "$service" ] && [ -n "$port" ]; then
@@ -149,9 +149,96 @@ detect_services() {
         
         seen_services["$service_key"]=1
         echo "$service:$port" >> "$TMP_SERVICES_FILE"
-        DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• ${service^}: Port ${HIGHLIGHT}${port}${CL}\n"
+        
+        # Improve display for Docker API
+        if [ "$service" = "docker" ] && [ "$port" = "2375" ]; then
+          DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Docker API: Port ${HIGHLIGHT}${port}${CL} (unencrypted remote access)\n"
+        else
+          DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• ${service^}: Port ${HIGHLIGHT}${port}${CL}\n"
+        fi
       fi
     done < "$STATE_FILE"
+  fi
+  
+  # Detect Docker and Docker API configuration
+  if command -v docker >/dev/null && systemctl is-active --quiet docker; then
+    # Check if Docker API is exposed
+    if [ -f /etc/docker/daemon.json ]; then
+      if grep -q '"hosts"' /etc/docker/daemon.json; then
+        if grep -q "tcp://0.0.0.0:2375" /etc/docker/daemon.json; then
+          service_key="docker:2375"
+          if [ -z "${seen_services[$service_key]}" ]; then
+            seen_services["$service_key"]=1
+            echo "docker:2375" >> "$TMP_SERVICES_FILE"
+            DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Docker API: Port ${HIGHLIGHT}2375${CL} (unencrypted remote access)\n"
+          fi
+        fi
+      fi
+    fi
+    
+    # Check systemd Docker service for exposed API
+    if systemctl cat docker.service 2>/dev/null | grep -q -- "-H tcp://0.0.0.0:2375"; then
+      service_key="docker:2375"
+      if [ -z "${seen_services[$service_key]}" ]; then
+        seen_services["$service_key"]=1
+        echo "docker:2375" >> "$TMP_SERVICES_FILE"
+        DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Docker API: Port ${HIGHLIGHT}2375${CL} (unencrypted remote access)\n"
+      fi
+    fi
+    
+    # Add Docker itself
+    service_key="docker:N/A"
+    if [ -z "${seen_services[$service_key]}" ]; then
+      seen_services["$service_key"]=1
+      echo "docker:N/A" >> "$TMP_SERVICES_FILE"
+      DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Docker: Running${CL}\n"
+    fi
+    
+    # Detect Docker containers with exposed ports
+    container_info=$(docker ps --format "{{.Names}}|{{.Ports}}" 2>/dev/null | grep -v "^$" | sort | uniq)
+    if [ -n "$container_info" ]; then
+      DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Docker containers with exposed ports:\n"
+      
+      # Process each container and detect known services
+      while IFS="|" read -r container_name ports; do
+        # Format for display
+        formatted_ports=$(echo "$ports" | tr -s ' ' | sed 's/,/,\n    /g')
+        DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}  - $container_name: $formatted_ports\n"
+        
+        # Check for known containers and their ports
+        if echo "$container_name" | grep -q "dockge"; then
+          # Extract Dockge port(s)
+          dockge_ports=$(echo "$ports" | grep -o "[0-9]\+->5001/tcp" | cut -d'-' -f1 | tr -d ':' | tr -d '>')
+          for port in $dockge_ports; do
+            service_key="dockge:$port"
+            if [ -z "${seen_services[$service_key]}" ]; then
+              seen_services["$service_key"]=1
+              echo "dockge:$port" >> "$TMP_SERVICES_FILE"
+              DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Dockge: Port ${HIGHLIGHT}${port}${CL}\n"
+            fi
+          done
+        fi
+        
+        if echo "$container_name" | grep -q "traefik"; then
+          # Extract Traefik port(s)
+          http_port=$(echo "$ports" | grep -o "[0-9]\+->80/tcp" | cut -d'-' -f1 | tr -d ':' | tr -d '>')
+          https_port=$(echo "$ports" | grep -o "[0-9]\+->443/tcp" | cut -d'-' -f1 | tr -d ':' | tr -d '>')
+          
+          if [ -n "$http_port" ] || [ -n "$https_port" ]; then
+            traefik_ports=""
+            [ -n "$http_port" ] && traefik_ports="$http_port"
+            [ -n "$https_port" ] && traefik_ports="${traefik_ports:+$traefik_ports,}$https_port"
+            
+            service_key="traefik:$traefik_ports"
+            if [ -z "${seen_services[$service_key]}" ]; then
+              seen_services["$service_key"]=1
+              echo "traefik:$traefik_ports" >> "$TMP_SERVICES_FILE"
+              DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Traefik: Ports ${HIGHLIGHT}${traefik_ports}${CL}\n"
+            fi
+          fi
+        fi
+      done <<< "$container_info"
+    fi
   fi
   
   # Add system-detected services only if not already in our list
@@ -185,29 +272,6 @@ detect_services() {
       seen_services["$service_key"]=1
       echo "apache2:80,443" >> "$TMP_SERVICES_FILE"
       DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Apache: Ports ${HIGHLIGHT}80,443${CL}\n"
-    fi
-  fi
-  
-  # Docker
-  if systemctl is-active --quiet docker; then
-    service_key="docker:N/A"
-    if [ -z "${seen_services[$service_key]}" ]; then
-      seen_services["$service_key"]=1
-      echo "docker:N/A" >> "$TMP_SERVICES_FILE" 
-      DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Docker: Running${CL}\n"
-      
-      # Check for docker containers with exposed ports
-      if command -v docker >/dev/null; then
-        container_info=$(docker ps --format "{{.Names}}: {{.Ports}}" 2>/dev/null | grep -v "^$" | sort | uniq)
-        if [ -n "$container_info" ]; then
-          DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Docker containers with exposed ports:\n"
-          while IFS= read -r line; do
-            if [ -n "$line" ]; then
-              DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}  - $line\n"
-            fi
-          done <<< "$container_info"
-        fi
-      fi
     fi
   fi
   
@@ -627,46 +691,6 @@ configure_firewall() {
           # Add multiple port entries if comma-separated
           IFS=',' read -ra PORT_ARRAY <<< "$ports"
           for port in "${PORT_ARRAY[@]}"; do
-            ufw allow "$port"/tcp comment "$service"
-            msg_ok "Added rule for $service (Port $port)"
-          done
-        done
-      fi
-    fi
-    
-    # Ask about custom port
-    if get_yes_no "Do you want to allow any custom ports?"; then
-      while true; do
-        echo -n "Enter port number to allow (1-65535): "
-        read -r port
-        echo
-        
-        if [[ -z "$port" ]]; then
-          break
-        fi
-        
-        if [[ $port =~ ^[0-9]+$ && $port -ge 1 && $port -le 65535 ]]; then
-          echo "Select protocol:"
-          echo -e "${HIGHLIGHT}1${CL}) TCP only"
-          echo -e "${HIGHLIGHT}2${CL}) UDP only"
-          echo -e "${HIGHLIGHT}3${CL}) Both TCP and UDP"
-          echo
-          echo -n "Enter your selection [1-3]: "
-          read -r proto_selection
-          echo
-          
-          case $proto_selection in
-            1) protocol="tcp" ;;
-            2) protocol="udp" ;;
-            3) protocol="both" ;;
-            *) protocol="tcp" ;;
-          esac
-          
-          echo -n "Enter a description for this rule: "
-          read -r description
-          echo
-          
-          if [[ $protocol == "tcp" ]]; then
             ufw allow $port/tcp comment "$description"
             msg_ok "Port $port/tcp allowed: $description"
           elif [[ $protocol == "udp" ]]; then
@@ -1075,6 +1099,13 @@ finalize_security_setup() {
   echo
   echo "For security changes to fully apply, it's recommended to reboot your server."
   echo
+  
+  # Clean up state file to ensure fresh detection on next run
+  if [ -f "$STATE_FILE" ]; then
+    rm -f "$STATE_FILE"
+    msg_ok "State file cleaned up for fresh detection on next run"
+  fi
+  
   if get_yes_no "Would you like to reboot now?"; then
     echo "Rebooting system in 5 seconds..."
     sleep 5
@@ -1121,4 +1152,44 @@ main() {
 }
 
 # Run the main function
-main "$@"
+main "$@" allow "$port"/tcp comment "$service"
+            msg_ok "Added rule for $service (Port $port)"
+          done
+        done
+      fi
+    fi
+    
+    # Ask about custom port
+    if get_yes_no "Do you want to allow any custom ports?"; then
+      while true; do
+        echo -n "Enter port number to allow (1-65535): "
+        read -r port
+        echo
+        
+        if [[ -z "$port" ]]; then
+          break
+        fi
+        
+        if [[ $port =~ ^[0-9]+$ && $port -ge 1 && $port -le 65535 ]]; then
+          echo "Select protocol:"
+          echo -e "${HIGHLIGHT}1${CL}) TCP only"
+          echo -e "${HIGHLIGHT}2${CL}) UDP only"
+          echo -e "${HIGHLIGHT}3${CL}) Both TCP and UDP"
+          echo
+          echo -n "Enter your selection [1-3]: "
+          read -r proto_selection
+          echo
+          
+          case $proto_selection in
+            1) protocol="tcp" ;;
+            2) protocol="udp" ;;
+            3) protocol="both" ;;
+            *) protocol="tcp" ;;
+          esac
+          
+          echo -n "Enter a description for this rule: "
+          read -r description
+          echo
+          
+          if [[ $protocol == "tcp" ]]; then
+            ufw
