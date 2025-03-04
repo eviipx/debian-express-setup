@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Debian Express Setup
-# Part 1: System Setup & Optimization Script
+# System Setup & Optimization Script
 # Author: [Your Name]
 # License: MIT
 # Description: Sets up and optimizes Debian-based servers with essential tools
@@ -14,7 +14,7 @@ BL="\033[0;34m"
 CL="\033[m"
 CM="${GN}✓${CL}"
 CROSS="${RD}✗${CL}"
-INFO="${YW}ℹ️${CL}"
+INFO="${YW}→${CL}"
 
 # Create a temporary directory for storing installation states
 TEMP_DIR="/tmp/debian-express"
@@ -28,16 +28,19 @@ DOCKER_INSTALLED=false
 # Function to display success messages
 msg_ok() {
   echo -e "${CM} $1"
+  echo
 }
 
 # Function to display info messages
 msg_info() {
   echo -e "${INFO} $1"
+  echo
 }
 
 # Function to display error messages
 msg_error() {
   echo -e "${CROSS} $1"
+  echo
 }
 
 # Record installed service for the security script to find
@@ -57,8 +60,8 @@ get_yes_no() {
     echo -e -n "${prompt} (y/n): "
     read -r response
     case $response in
-      [Yy]* ) return 0 ;;
-      [Nn]* ) return 1 ;;
+      [Yy]* ) echo; return 0 ;;
+      [Nn]* ) echo; return 1 ;;
       * ) echo "Please answer yes or no." ;;
     esac
   done
@@ -108,18 +111,9 @@ display_banner() {
 | |_| |  __/ |_) | | (_| | | | | | |___ >  <| |_) | | |  __/\__ \__ \
 |____/ \___|_.__/|_|\__,_|_| |_| |_____/_/\_\ .__/|_|  \___||___/___/
                                             |_|                      
-  ____       _                ____            _                 
- / ___|  ___| |_ _   _ _ __  / ___|  ___  ___| |_ _   _ _ __   
- \___ \ / _ \ __| | | | '_ \ \___ \ / _ \/ __| __| | | | '_ \  
-  ___) |  __/ |_| |_| | |_) | ___) |  __/ (__| |_| |_| | |_) | 
- |____/ \___|\__|\__,_| .__/ |____/ \___|\___|\__|\__,_| .__/  
-                      |_|                              |_|     
 EOF
 
-  echo -e "\n${BL}Welcome to Debian Express Setup!${CL}\n"
-  echo -e "Part 1: System Setup & Optimization\n"
-  echo -e "This script will help you configure, optimize, and install tools on your Debian-based server."
-  echo -e "Run debian-express-secure.sh after this script to enable security features.\n"
+  echo -e "\n${BL}System Setup & Optimization${CL}\n"
 }
 
 #########################
@@ -143,6 +137,7 @@ configure_hostname() {
   echo "Current hostname: $current_hostname"
   echo -n "Enter new hostname (leave empty to keep current): "
   read -r new_hostname
+  echo
   
   if [ -n "$new_hostname" ] && [ "$new_hostname" != "$current_hostname" ]; then
     hostnamectl set-hostname "$new_hostname"
@@ -195,6 +190,7 @@ configure_locale() {
 configure_root_password() {
   if get_yes_no "Do you want to set/change the root password?"; then
     passwd root
+    echo
     msg_ok "Root password updated"
   else
     msg_info "Root password unchanged"
@@ -213,6 +209,7 @@ configure_user() {
   if get_yes_no "Do you want to create a new non-root user with sudo access?"; then
     echo -n "Enter username for the new user: "
     read -r username
+    echo
     
     if [ -n "$username" ]; then
       # Check if user already exists
@@ -226,6 +223,7 @@ configure_user() {
         fi
       else
         adduser "$username"
+        echo
         # Install sudo if not already installed
         apt install -y sudo
         # Add user to sudo group
@@ -294,12 +292,15 @@ configure_swap() {
   if [ $swap_exists -eq 1 ]; then
     echo "Current swap: ${swap_size}MB, RAM: ${ram_size}MB"
     echo "Recommended swap: ${recommended_swap}MB"
+    echo
     echo "What would you like to do?"
     echo "1) Keep current swap configuration"
     echo "2) Resize swap to recommended size (${recommended_swap}MB)"
     echo "3) Set a custom swap size"
+    echo
     echo -n "Enter option [1-3]: "
     read -r swap_option
+    echo
     
     case $swap_option in
       1)
@@ -314,6 +315,7 @@ configure_swap() {
       3)
         echo -n "Enter desired swap size in MB: "
         read -r custom_size
+        echo
         if [ -n "$custom_size" ]; then
           swapoff -a
           create_swap_file "${custom_size}"
@@ -328,12 +330,15 @@ configure_swap() {
   else
     echo "No swap detected, RAM: ${ram_size}MB"
     echo "Recommended swap: ${recommended_swap}MB"
+    echo
     echo "What would you like to do?"
     echo "1) Create swap with recommended size (${recommended_swap}MB)"
     echo "2) Create swap with custom size"
     echo "3) Do not create swap"
+    echo
     echo -n "Enter option [1-3]: "
     read -r swap_option
+    echo
     
     case $swap_option in
       1)
@@ -342,6 +347,7 @@ configure_swap() {
       2)
         echo -n "Enter desired swap size in MB: "
         read -r custom_size
+        echo
         if [ -n "$custom_size" ]; then
           create_swap_file "${custom_size}"
         else
@@ -477,72 +483,27 @@ install_nohang() {
 
 # Function to set up monitoring and management tools
 setup_monitoring_tools() {
-  msg_info "Setting up monitoring and management tools..."
-  
-  # Call each tool installation function
-  install_monitor_benchmark_tools
-  
-  msg_ok "Monitoring and management tools setup completed"
-}
-
-# Function to set up monitoring tools
-install_monitor_benchmark_tools() {
-  if get_yes_no "Would you like to install system monitor and benchmark tools?"; then
-    echo "Select tools to install:"
-    echo "1) btop - Modern resource monitor"
-    echo "2) speedtest-cli - Internet speed test"
-    echo "3) fastfetch - System information display"
-    echo "4) All of the above"
-    echo "5) None"
-    echo -n "Enter your choice [1-5]: "
-    read -r tools_option
+  if get_yes_no "Would you like to install a set of tools for system information, monitoring, and internet speed testing?"; then
+    msg_info "Installing system monitoring and utility tools..."
     
-    case $tools_option in
-      1)
-        install_btop
-        ;;
-      2)
-        install_speedtest
-        ;;
-      3)
-        install_fastfetch
-        ;;
-      4)
-        install_btop
-        install_speedtest
-        install_fastfetch
-        ;;
-      5)
-        msg_info "No monitoring tools selected"
-        ;;
-      *)
-        msg_info "Invalid option. No tools installed"
-        ;;
-    esac
+    # Install fastfetch (system information)
+    echo "Installing fastfetch - System information display..."
+    add-apt-repository ppa:zhangsongcui3371/fastfetch -y
+    apt update
+    apt install -y fastfetch
+    
+    # Install btop (system monitoring)
+    echo "Installing btop - Modern resource monitor..."
+    apt install -y btop
+    
+    # Install speedtest-cli (internet speed testing)
+    echo "Installing speedtest-cli - Internet speed test..."
+    apt install -y speedtest-cli
+    
+    msg_ok "System monitoring tools installed successfully"
   else
-    msg_info "Monitoring tools installation skipped"
+    msg_info "System monitoring tools installation skipped"
   fi
-}
-
-# Helper functions for tool installation
-install_btop() {
-  msg_info "Installing btop..."
-  apt install -y btop
-  msg_ok "btop installed"
-}
-
-install_speedtest() {
-  msg_info "Installing speedtest-cli..."
-  apt install -y speedtest-cli
-  msg_ok "speedtest-cli installed"
-}
-
-install_fastfetch() {
-  msg_info "Installing fastfetch..."
-  add-apt-repository ppa:zhangsongcui3371/fastfetch -y
-  apt update
-  apt install -y fastfetch
-  msg_ok "fastfetch installed"
 }
 
 ###########################
@@ -583,15 +544,16 @@ setup_docker() {
       
       if [ -n "$users" ]; then
         echo "Select users to add to the docker group (allows running Docker without sudo):"
-        PS3="Enter number(s) separated by space, or 'none' to skip: "
-        select user in $users "none"; do
-          if [ "$user" = "none" ]; then
+        echo
+        PS3="Enter number or 'done' when finished: "
+        select user in $users "done"; do
+          if [ "$user" = "done" ]; then
+            echo
             break
           elif [ -n "$user" ]; then
             usermod -aG docker "$user"
-            msg_ok "Added user $user to the docker group"
+            echo "Added user $user to the docker group"
           fi
-          echo "Select another user or 'none' to finish:"
         done
       fi
       
@@ -636,22 +598,7 @@ setup_dockge() {
         curl -fsSL https://raw.githubusercontent.com/louislam/dockge/master/docker-compose.yml -o docker-compose.yml
       fi
       
-      # Set up admin password
-      echo -n "Create a new admin password for Dockge (leave empty for random password): "
-      read -rs admin_password
-      echo
-      
-      if [ -n "$admin_password" ]; then
-        # Create .env file with password
-        echo "DOCKGE_ADMIN_PASSWORD=$admin_password" > .env
-      else
-        # Generate random password
-        random_password=$(openssl rand -base64 12)
-        echo "DOCKGE_ADMIN_PASSWORD=$random_password" > .env
-        msg_info "Generated random password: $random_password"
-      fi
-      
-      # Start Dockge
+      # Start Dockge without setting admin password (let the UI handle first-time setup)
       docker compose up -d
       
       if [[ $? -eq 0 ]]; then
@@ -659,17 +606,15 @@ setup_dockge() {
         server_ip=$(hostname -I | awk '{print $1}')
         dockge_port=5001
         
-        msg_ok "Dockge installed successfully"
-        
         # Record for firewall configuration
         record_installed_service "dockge" "$dockge_port"
         
-        dockge_password=$(cat .env | grep DOCKGE_ADMIN_PASSWORD | cut -d= -f2)
         echo "Dockge container manager has been installed successfully."
         echo "Access URL: http://$server_ip:$dockge_port"
-        echo "Username: admin"
-        echo "Password: $dockge_password"
+        echo "Follow the on-screen instructions to create an admin account during first login."
         echo
+        
+        msg_ok "Dockge installed successfully"
       else
         msg_error "Dockge installation failed"
       fi
@@ -735,11 +680,9 @@ display_summary() {
     
     # Check if Dockge is installed - use Docker ps to verify
     if docker ps 2>/dev/null | grep -q "dockge"; then
-      dockge_password=$(cat /opt/stacks/dockge/.env 2>/dev/null | grep DOCKGE_ADMIN_PASSWORD | cut -d= -f2 || echo "See installation details")
       echo "• Dockge container manager: Installed and running"
       echo "  - URL: http://$server_ip:5001"
-      echo "  - Username: admin"
-      echo "  - Password: $dockge_password"
+      echo "  - First-time setup required on first access"
     else
       echo "• Dockge container manager: Not installed"
     fi
