@@ -15,6 +15,7 @@ CL="\033[m"
 CM="${GN}✓${CL}"
 CROSS="${RD}✗${CL}"
 INFO="${YW}→${CL}"
+HIGHLIGHT="${BL}"
 
 # Create a temporary directory for storing installation states
 TEMP_DIR="/tmp/debian-express"
@@ -134,7 +135,7 @@ update_system() {
 # Function to set hostname
 configure_hostname() {
   current_hostname=$(hostname)
-  echo "Current hostname: $current_hostname"
+  echo -e "Current hostname: ${HIGHLIGHT}$current_hostname${CL}"
   echo -n "Enter new hostname (leave empty to keep current): "
   read -r new_hostname
   echo
@@ -152,7 +153,7 @@ configure_hostname() {
 # Function to set timezone
 configure_timezone() {
   current_timezone=$(timedatectl | grep "Time zone" | awk '{print $3}')
-  echo "Current timezone: $current_timezone"
+  echo -e "Current timezone: ${HIGHLIGHT}$current_timezone${CL}"
   if get_yes_no "Do you want to change the timezone?"; then
     dpkg-reconfigure tzdata
     new_timezone=$(timedatectl | grep "Time zone" | awk '{print $3}')
@@ -176,7 +177,7 @@ configure_locale() {
     *) readable_locale="$current_locale" ;;
   esac
 
-  echo "Current locale: $readable_locale"
+  echo -e "Current locale: ${HIGHLIGHT}$readable_locale${CL}"
   if get_yes_no "Do you want to configure system locale?"; then
     dpkg-reconfigure locales
     new_locale=$(locale | grep LANG= | cut -d= -f2)
@@ -205,7 +206,7 @@ configure_user() {
     existing_users="None"
   fi
 
-  echo "Current non-system users: $existing_users"
+  echo -e "Current non-system users: ${HIGHLIGHT}$existing_users${CL}"
   if get_yes_no "Do you want to create a new non-root user with sudo access?"; then
     echo -n "Enter username for the new user: "
     read -r username
@@ -247,9 +248,9 @@ optimize_system() {
   if get_yes_no "Would you like to apply system optimizations?"; then
     # Call each optimization function
     configure_swap
+    install_nohang # Moved up in the flow as requested
     optimize_io_scheduler
     optimize_kernel_parameters
-    install_nohang
     
     msg_ok "System optimization completed"
   else
@@ -290,8 +291,8 @@ configure_swap() {
   
   # Display swap information
   if [ $swap_exists -eq 1 ]; then
-    echo "Current swap: ${swap_size}MB, RAM: ${ram_size}MB"
-    echo "Recommended swap: ${recommended_swap}MB"
+    echo -e "Current swap: ${HIGHLIGHT}${swap_size}MB${CL}, RAM: ${HIGHLIGHT}${ram_size}MB${CL}"
+    echo -e "Recommended swap: ${HIGHLIGHT}${recommended_swap}MB${CL}"
     echo
     echo "What would you like to do?"
     echo "1) Keep current swap configuration"
@@ -328,8 +329,8 @@ configure_swap() {
         ;;
     esac
   else
-    echo "No swap detected, RAM: ${ram_size}MB"
-    echo "Recommended swap: ${recommended_swap}MB"
+    echo -e "No swap detected, RAM: ${HIGHLIGHT}${ram_size}MB${CL}"
+    echo -e "Recommended swap: ${HIGHLIGHT}${recommended_swap}MB${CL}"
     echo
     echo "What would you like to do?"
     echo "1) Create swap with recommended size (${recommended_swap}MB)"
@@ -392,6 +393,25 @@ create_swap_file() {
   sysctl -p /etc/sysctl.d/99-swappiness.conf
   
   msg_ok "Swap file created and configured (${size_mb}MB)"
+}
+
+# Function to install nohang to prevent system freezes (moved up in flow)
+install_nohang() {
+  if get_yes_no "Would you like to install nohang? It's a daemon that prevents system freezes caused by out-of-memory conditions."; then
+    msg_info "Installing nohang..."
+    
+    # Add repository and install nohang
+    add-apt-repository ppa:oibaf/test -y
+    apt update
+    apt install -y nohang
+    
+    # Enable and start nohang services
+    systemctl enable --now nohang-desktop.service
+    
+    msg_ok "Nohang installed and configured successfully"
+  else
+    msg_info "Nohang installation skipped"
+  fi
 }
 
 # Function to optimize IO scheduler
@@ -458,25 +478,6 @@ EOF
   fi
 }
 
-# Function to install nohang to prevent system freezes
-install_nohang() {
-  if get_yes_no "Would you like to install nohang? It's a daemon that prevents system freezes caused by out-of-memory conditions."; then
-    msg_info "Installing nohang..."
-    
-    # Add repository and install nohang
-    add-apt-repository ppa:oibaf/test -y
-    apt update
-    apt install -y nohang
-    
-    # Enable and start nohang services
-    systemctl enable --now nohang-desktop.service
-    
-    msg_ok "Nohang installed and configured successfully"
-  else
-    msg_info "Nohang installation skipped"
-  fi
-}
-
 ###################################
 # 3. MANAGEMENT & MONITORING TOOLS
 ###################################
@@ -487,18 +488,22 @@ setup_monitoring_tools() {
     msg_info "Installing system monitoring and utility tools..."
     
     # Install fastfetch (system information)
-    echo "Installing fastfetch - System information display..."
+    echo "Installing system monitoring tools..."
+    
+    # Install fastfetch
     add-apt-repository ppa:zhangsongcui3371/fastfetch -y
     apt update
     apt install -y fastfetch
+    echo -e "${CM} Fastfetch - System information display"
     
-    # Install btop (system monitoring)
-    echo "Installing btop - Modern resource monitor..."
+    # Install btop
     apt install -y btop
+    echo -e "${CM} Btop - Modern resource monitor"
     
-    # Install speedtest-cli (internet speed testing)
-    echo "Installing speedtest-cli - Internet speed test..."
+    # Install speedtest-cli
     apt install -y speedtest-cli
+    echo -e "${CM} Speedtest-cli - Internet speed test"
+    echo
     
     msg_ok "System monitoring tools installed successfully"
   else
@@ -725,9 +730,8 @@ finalize_setup() {
   msg_ok "Debian Express Setup completed successfully!"
   echo
   echo "Your server has been configured according to your preferences."
-  echo "Please run debian-express-secure.sh next to set up security features."
   echo
-  echo "For best results, it's recommended to reboot your server before running the security script."
+  echo "For best results, it's recommended to reboot your server now."
   echo
   read -p "Would you like to reboot now? (y/N): " reboot_choice
   if [[ "$reboot_choice" =~ ^[Yy]$ ]]; then
@@ -735,7 +739,7 @@ finalize_setup() {
     sleep 5
     reboot
   else
-    echo "Please remember to reboot your system manually before running the security script."
+    echo "Please remember to reboot your system manually when convenient."
   fi
 }
 
