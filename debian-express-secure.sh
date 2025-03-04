@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 
 # Debian Express Secure
-# Part 2: Security & Network Configuration Script
+# Security & Network Configuration Script
 # Author: [Your Name]
 # License: MIT
 # Description: Secures and configures networking for Debian-based servers
 
 # Define colors and formatting
-RD=$(echo -e "\033[01;31m")
-GN=$(echo -e "\033[1;92m")
-YW=$(echo -e "\033[33m")
-BL=$(echo -e "\033[1;34m")
-CL=$(echo -e "\033[m")
+RD="\033[01;31m"
+GN="\033[0;32m"
+YW="\033[33m"
+BL="\033[0;34m"
+CL="\033[m"
 CM="${GN}✓${CL}"
 CROSS="${RD}✗${CL}"
-INFO="${YW}ℹ️${CL}"
+INFO="${YW}→${CL}"
+HIGHLIGHT="${BL}"
 
 # Create a temporary directory for storing installation states
 TEMP_DIR="/tmp/debian-express"
@@ -25,16 +26,35 @@ touch "$STATE_FILE"
 # Function to display success messages
 msg_ok() {
   echo -e "${CM} $1"
+  echo
 }
 
 # Function to display info messages
 msg_info() {
   echo -e "${INFO} $1"
+  echo
 }
 
 # Function to display error messages
 msg_error() {
   echo -e "${CROSS} $1"
+  echo
+}
+
+# Function to get yes/no input from user
+get_yes_no() {
+  local prompt="$1"
+  local response
+  
+  while true; do
+    echo -e -n "${prompt} (${HIGHLIGHT}y${CL}/${HIGHLIGHT}n${CL}): "
+    read -r response
+    case $response in
+      [Yy]* ) echo; return 0 ;;
+      [Nn]* ) echo; return 1 ;;
+      * ) echo "Please answer yes or no." ;;
+    esac
+  done
 }
 
 # Function to check for root privileges
@@ -89,17 +109,15 @@ display_banner() {
                                  
 EOF
 
-  echo -e "\n${BL}Welcome to Debian Express Secure!${CL}\n"
-  echo -e "Part 2: Security & Network Configuration\n"
-  echo -e "This script will help you secure and configure networking on your Debian-based server."
-  echo -e "This script should be run after debian-express-setup.sh.\n"
+  echo -e "\n${BL}Security & Network Configuration${CL}\n"
 }
 
 # Function to check if setup script was run
 check_setup_script() {
   if [ ! -f "$STATE_FILE" ]; then
-    whiptail --title "Warning" --yesno "It appears that debian-express-setup.sh has not been run yet or no services were installed.\n\nIt's recommended to run the setup script first. Continue anyway?" 12 70
-    if [ $? -ne 0 ]; then
+    if get_yes_no "It appears that debian-express-setup.sh has not been run yet or no services were installed. It's recommended to run the setup script first. Continue anyway?"; then
+      return 0
+    else
       echo "Please run debian-express-setup.sh first."
       exit 0
     fi
@@ -124,88 +142,112 @@ configure_ssh_security() {
   cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup.$(date +%F)
   
   # SSH hardening options
-  ssh_options=$(whiptail --title "SSH Security Options" --checklist \
-    "Select SSH security options to configure:" 16 78 6 \
-    "DISABLE_ROOT" "Disable root SSH login (recommended)" ON \
-    "PUBKEY_AUTH" "Enable public key authentication (recommended)" ON \
-    "DISABLE_PASSWORD" "Disable password authentication (requires SSH keys)" OFF \
-    "LIMIT_USERS" "Limit SSH access to specific users" OFF \
-    "SSH_KEYS" "Set up SSH keys for a user" ON 3>&1 1>&2 2>&3)
-
+  echo "Select SSH security options to configure:"
+  echo
+  echo -e "${HIGHLIGHT}1${CL}) Disable root SSH login (recommended)"
+  echo -e "${HIGHLIGHT}2${CL}) Enable public key authentication (recommended)"
+  echo -e "${HIGHLIGHT}3${CL}) Disable password authentication (requires SSH keys)"
+  echo -e "${HIGHLIGHT}4${CL}) Limit SSH access to specific users"
+  echo -e "${HIGHLIGHT}5${CL}) Set up SSH keys for a user"
+  echo
+  echo "Enter your selections (e.g., 125 for options 1, 2, and 5):"
+  read -r ssh_selections
+  echo
+  
+  # Create directory for custom SSH config
+  mkdir -p /etc/ssh/sshd_config.d
+  
   # Process SSH options
-  if [[ $? -eq 0 ]]; then
-    # Create directory for custom SSH config
-    mkdir -p /etc/ssh/sshd_config.d
-    
-    # Harden SSH configuration based on selected options
-    if [[ $ssh_options == *"DISABLE_ROOT"* ]]; then
-      echo "PermitRootLogin no" > /etc/ssh/sshd_config.d/50-security.conf
-      msg_ok "Root SSH login disabled"
-    fi
-    
-    if [[ $ssh_options == *"PUBKEY_AUTH"* ]]; then
-      echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config.d/50-security.conf
-      msg_ok "Public key authentication enabled"
-    fi
-    
-    if [[ $ssh_options == *"DISABLE_PASSWORD"* ]]; then
-      # Check if we're setting up SSH keys to prevent lockouts
-      if [[ $ssh_options != *"SSH_KEYS"* ]]; then
-        if ! whiptail --title "Security Warning" --yesno "You're about to disable password authentication without setting up SSH keys.\n\nThis could lock you out of your server if SSH keys aren't already configured.\n\nAre you sure you want to continue?" 12 78; then
-          msg_info "Password authentication remains enabled"
-        else
-          echo "PasswordAuthentication no" >> /etc/ssh/sshd_config.d/50-security.conf
-          msg_ok "Password authentication disabled"
-        fi
+  if [[ $ssh_selections == *"1"* ]]; then
+    echo "PermitRootLogin no" > /etc/ssh/sshd_config.d/50-security.conf
+    msg_ok "Root SSH login disabled"
+  fi
+  
+  if [[ $ssh_selections == *"2"* ]]; then
+    echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config.d/50-security.conf
+    msg_ok "Public key authentication enabled"
+  fi
+  
+  if [[ $ssh_selections == *"3"* ]]; then
+    # Check if we're setting up SSH keys to prevent lockouts
+    if [[ $ssh_selections != *"5"* ]]; then
+      if ! get_yes_no "You're about to disable password authentication without setting up SSH keys. This could lock you out of your server if SSH keys aren't already configured. Are you sure you want to continue?"; then
+        msg_info "Password authentication remains enabled"
       else
         echo "PasswordAuthentication no" >> /etc/ssh/sshd_config.d/50-security.conf
         msg_ok "Password authentication disabled"
       fi
+    else
+      echo "PasswordAuthentication no" >> /etc/ssh/sshd_config.d/50-security.conf
+      msg_ok "Password authentication disabled"
     fi
+  fi
+  
+  if [[ $ssh_selections == *"4"* ]]; then
+    # Get list of non-system users
+    existing_users=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd | sort)
     
-    if [[ $ssh_options == *"LIMIT_USERS"* ]]; then
-      # Get list of non-system users
-      existing_users=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd | sort)
+    if [ -z "$existing_users" ]; then
+      msg_error "No non-system users found"
+    else
+      echo "Select users allowed to access via SSH:"
+      echo
       
-      # Format for whiptail checklist
-      user_options=""
+      # Display list of users
+      user_num=1
+      declare -A user_map
       for user in $existing_users; do
-        user_options="$user_options $user User ON "
+        echo -e "${HIGHLIGHT}$user_num${CL}) $user"
+        user_map[$user_num]=$user
+        ((user_num++))
       done
       
-      # Show user selection dialog
-      selected_users=$(whiptail --title "Limit SSH Access" --checklist \
-        "Select users allowed to access via SSH:" 16 60 8 $user_options 3>&1 1>&2 2>&3)
+      echo
+      echo "Enter user numbers (e.g., 123 for users 1, 2, and 3):"
+      read -r user_selections
+      echo
       
-      if [[ $? -eq 0 && ! -z "$selected_users" ]]; then
+      selected_users=""
+      for ((i=0; i<${#user_selections}; i++)); do
+        num="${user_selections:$i:1}"
+        if [[ $num =~ [0-9] && -n "${user_map[$num]}" ]]; then
+          selected_users+="${user_map[$num]} "
+        fi
+      done
+      
+      if [ -n "$selected_users" ]; then
         # Format the list correctly for sshd_config
-        formatted_users=$(echo $selected_users | tr -d '"' | tr ' ' ',')
+        formatted_users=$(echo $selected_users | tr ' ' ',')
         echo "AllowUsers $formatted_users" >> /etc/ssh/sshd_config.d/50-security.conf
         msg_ok "SSH access limited to: $formatted_users"
+      else
+        msg_info "No valid users selected"
       fi
     fi
-    
-    # Set up SSH keys for a user if selected
-    if [[ $ssh_options == *"SSH_KEYS"* ]]; then
-      setup_ssh_keys
-    fi
-    
-    # After configuring SSH, ask about passwordless sudo
-    setup_passwordless_sudo
-    
-    # Restart SSH service
-    systemctl restart ssh
-    
-    # Display current SSH configuration
-    current_settings=$(sshd -T | grep -E 'permitrootlogin|pubkeyauthentication|passwordauthentication|port|allowusers')
-    
-    # Show final SSH settings
-    whiptail --title "SSH Configuration Complete" --msgbox "SSH has been configured with the following settings:\n\n$current_settings\n\nKeep this terminal window open and verify you can connect with a new SSH session before closing." 16 78
-    
-    msg_ok "SSH configuration completed"
-  else
-    msg_info "SSH configuration skipped"
   fi
+  
+  # Set up SSH keys for a user if selected
+  if [[ $ssh_selections == *"5"* ]]; then
+    setup_ssh_keys
+  fi
+  
+  # After configuring SSH, ask about passwordless sudo
+  setup_passwordless_sudo
+  
+  # Restart SSH service
+  systemctl restart ssh
+  
+  # Display current SSH configuration
+  current_settings=$(sshd -T | grep -E 'permitrootlogin|pubkeyauthentication|passwordauthentication|port|allowusers')
+  
+  echo "SSH has been configured with the following settings:"
+  echo
+  echo "$current_settings"
+  echo
+  echo "Keep this terminal window open and verify you can connect with a new SSH session before closing."
+  echo
+  
+  msg_ok "SSH configuration completed"
 }
 
 # Function to set up SSH keys for a user
@@ -213,25 +255,45 @@ setup_ssh_keys() {
   # Get list of non-system users
   existing_users=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd | sort)
   
-  # Format for whiptail menu
-  user_options=""
-  item_num=1
+  if [ -z "$existing_users" ]; then
+    msg_error "No non-system users found"
+    return
+  fi
+  
+  echo "Select a user to set up SSH keys for:"
+  echo
+  
+  # Display list of users
+  user_num=1
+  declare -A user_map
   for user in $existing_users; do
-    user_options="$user_options $item_num $user "
-    ((item_num++))
+    echo -e "${HIGHLIGHT}$user_num${CL}) $user"
+    user_map[$user_num]=$user
+    ((user_num++))
   done
   
-  # Show user selection menu
-  selected_user=$(whiptail --title "SSH Key Setup" --menu \
-    "Select a user to set up SSH keys for:" 16 60 8 $user_options 3>&1 1>&2 2>&3)
+  echo
+  echo -n "Enter user number: "
+  read -r selected_num
+  echo
   
-  if [[ $? -eq 0 && ! -z "$selected_user" ]]; then
-    username=$(echo $existing_users | tr ' ' '\n' | sed -n "${selected_user}p")
+  if [[ $selected_num =~ [0-9]+ && -n "${user_map[$selected_num]}" ]]; then
+    username="${user_map[$selected_num]}"
     
-    # Show SSH key information and instructions
-    if whiptail --title "SSH Key Setup Guide" --yesno \
-      "To set up SSH key authentication for $username:\n\n1. ON YOUR LOCAL MACHINE, first generate an SSH key if you don't\n   already have one:\n\n   ssh-keygen -t ed25519 -C \"email@example.com\"\n   or\n   ssh-keygen -t rsa -b 4096 -C \"email@example.com\"\n\n2. Then copy your key to this server with:\n\n   ssh-copy-id $username@SERVER_IP\n\n3. Press <Yes> to prepare the server for SSH key authentication\n   or <No> to cancel" 20 78; then
-      
+    echo "To set up SSH key authentication for $username:"
+    echo
+    echo "1. ON YOUR LOCAL MACHINE, first generate an SSH key if you don't already have one:"
+    echo 
+    echo "   ssh-keygen -t ed25519 -C \"email@example.com\""
+    echo "   or"
+    echo "   ssh-keygen -t rsa -b 4096 -C \"email@example.com\""
+    echo
+    echo "2. Then copy your key to this server with:"
+    echo
+    echo "   ssh-copy-id $username@SERVER_IP"
+    echo
+    
+    if get_yes_no "Press <y> to prepare the server for SSH key authentication or <n> to cancel"; then
       # Set up .ssh directory with correct permissions
       user_home=$(eval echo ~${username})
       mkdir -p ${user_home}/.ssh
@@ -247,13 +309,14 @@ setup_ssh_keys() {
       
       echo "You can now copy your key from your local machine using:"
       echo "ssh-copy-id $username@SERVER_IP"
-      echo ""
+      echo
       echo "These server-side preparations will allow you to use SSH keys for login."
+      echo
     else
       msg_info "SSH key setup cancelled"
     fi
   else
-    msg_info "SSH key setup cancelled"
+    msg_info "Invalid selection. SSH key setup cancelled."
   fi
 }
 
@@ -262,29 +325,31 @@ setup_passwordless_sudo() {
   # Get list of sudo-capable users
   sudo_users=$(grep -Po '^sudo.+:\K.*$' /etc/group | tr ',' ' ')
   
-  # Format for whiptail menu
-  user_options=""
-  item_num=1
-  for user in $sudo_users; do
-    user_options="$user_options $item_num $user "
-    ((item_num++))
-  done
-  
-  if [ -z "$user_options" ]; then
+  if [ -z "$sudo_users" ]; then
     msg_info "No sudo users found for passwordless configuration"
     return
   fi
   
-  # Ask if user wants to configure passwordless sudo
-  if whiptail --title "Passwordless Sudo" --yesno \
-    "Would you like to configure passwordless sudo for SSH users?\n\nThis allows running sudo commands without entering a password.\n\nNOTE: This is most secure when SSH key authentication is enforced and password authentication is disabled." 12 78; then
+  if get_yes_no "Would you like to configure passwordless sudo for SSH users? This allows running sudo commands without entering a password. NOTE: This is most secure when SSH key authentication is enforced and password authentication is disabled."; then
+    echo "Select a user to enable passwordless sudo for:"
+    echo
     
-    # Show user selection menu
-    selected_user=$(whiptail --title "Passwordless Sudo" --menu \
-      "Select a user to enable passwordless sudo for:" 16 60 8 $user_options 3>&1 1>&2 2>&3)
+    # Display list of users
+    user_num=1
+    declare -A user_map
+    for user in $sudo_users; do
+      echo -e "${HIGHLIGHT}$user_num${CL}) $user"
+      user_map[$user_num]=$user
+      ((user_num++))
+    done
     
-    if [[ $? -eq 0 && ! -z "$selected_user" ]]; then
-      username=$(echo $sudo_users | tr ' ' '\n' | sed -n "${selected_user}p")
+    echo
+    echo -n "Enter user number: "
+    read -r selected_num
+    echo
+    
+    if [[ $selected_num =~ [0-9]+ && -n "${user_map[$selected_num]}" ]]; then
+      username="${user_map[$selected_num]}"
       
       # Check if user has SSH keys configured
       user_home=$(eval echo ~${username})
@@ -293,13 +358,13 @@ setup_passwordless_sudo() {
         key_warning=""
       else
         ssh_key_status="WARNING: No SSH keys detected for this user!"
-        key_warning="\n\nEnabling passwordless sudo WITHOUT SSH key authentication is a security risk."
+        key_warning="\nEnabling passwordless sudo WITHOUT SSH key authentication is a security risk."
       fi
       
-      # Ask for confirmation
-      if whiptail --title "Confirm Passwordless Sudo" --yesno \
-        "${ssh_key_status}${key_warning}\n\nAre you sure you want to enable passwordless sudo for ${username}?" 12 78; then
-        
+      echo -e "$ssh_key_status$key_warning"
+      echo
+      
+      if get_yes_no "Are you sure you want to enable passwordless sudo for ${username}?"; then
         # Configure passwordless sudo
         echo "${username} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/99-${username}-nopasswd
         chmod 440 /etc/sudoers.d/99-${username}-nopasswd
@@ -308,7 +373,7 @@ setup_passwordless_sudo() {
         msg_info "Passwordless sudo configuration cancelled"
       fi
     else
-      msg_info "No user selected for passwordless sudo"
+      msg_info "Invalid selection. Passwordless sudo configuration cancelled."
     fi
   else
     msg_info "Passwordless sudo configuration skipped"
@@ -329,9 +394,9 @@ configure_firewall() {
   # Check if UFW is already enabled
   ufw_status=$(ufw status | head -1)
   
-  if whiptail --title "Firewall Configuration" --yesno "Would you like to configure the firewall (UFW)?\n\nCurrent status: $ufw_status" 10 60; then
+  if get_yes_no "Would you like to configure the firewall (UFW)? Current status: $ufw_status"; then
     # Confirm the basics
-    if whiptail --title "Basic Firewall Rules" --yesno "Do you want to apply the recommended basic rules?\n\n• Allow SSH (port 22)\n• Deny all other incoming connections\n• Allow all outgoing connections" 12 70; then
+    if get_yes_no "Do you want to apply the recommended basic rules? (Allow SSH, deny incoming, allow outgoing)"; then
       # Configure basic rules
       ufw default deny incoming
       ufw default allow outgoing
@@ -340,97 +405,102 @@ configure_firewall() {
     fi
     
     # Ask about common web services
-    web_services=$(whiptail --title "Common Web Services" --checklist \
-      "Select web services to allow:" 10 60 2 \
-      "HTTP" "Web server (port 80)" OFF \
-      "HTTPS" "Secure web server (port 443)" OFF 3>&1 1>&2 2>&3)
+    echo "Select web services to allow:"
+    echo
+    echo -e "${HIGHLIGHT}1${CL}) HTTP (port 80)"
+    echo -e "${HIGHLIGHT}2${CL}) HTTPS (port 443)"
+    echo -e "${HIGHLIGHT}3${CL}) None"
+    echo
+    echo -n "Enter your selections (e.g., 12 for both): "
+    read -r web_selections
+    echo
     
-    if [[ $? -eq 0 && ! -z "$web_services" ]]; then
-      # Process selected services
-      if [[ $web_services == *"HTTP"* ]]; then
-        ufw allow 80/tcp comment 'HTTP'
-        msg_ok "HTTP traffic allowed"
-      fi
-      
-      if [[ $web_services == *"HTTPS"* ]]; then
-        ufw allow 443/tcp comment 'HTTPS'
-        msg_ok "HTTPS traffic allowed"
-      fi
+    if [[ $web_selections == *"1"* ]]; then
+      ufw allow 80/tcp comment 'HTTP'
+      msg_ok "HTTP traffic allowed"
+    fi
+    
+    if [[ $web_selections == *"2"* ]]; then
+      ufw allow 443/tcp comment 'HTTPS'
+      msg_ok "HTTPS traffic allowed"
     fi
     
     # Auto-detect installed services and add rules
     detect_and_add_service_rules
     
     # Ask about custom port
-    if whiptail --title "Custom Port" --yesno "Do you want to allow any custom ports?" 8 60; then
+    if get_yes_no "Do you want to allow any custom ports?"; then
       while true; do
-        port=$(whiptail --inputbox "Enter port number to allow (1-65535):" 8 60 3>&1 1>&2 2>&3)
+        echo -n "Enter port number to allow (1-65535): "
+        read -r port
+        echo
         
-        if [[ $? -ne 0 || -z "$port" ]]; then
+        if [[ -z "$port" ]]; then
           break
         fi
         
         if [[ $port =~ ^[0-9]+$ && $port -ge 1 && $port -le 65535 ]]; then
-          protocol=$(whiptail --title "Protocol" --menu "Select protocol:" 10 60 3 \
-            "tcp" "TCP only" \
-            "udp" "UDP only" \
-            "both" "Both TCP and UDP" 3>&1 1>&2 2>&3)
+          echo "Select protocol:"
+          echo -e "${HIGHLIGHT}1${CL}) TCP only"
+          echo -e "${HIGHLIGHT}2${CL}) UDP only"
+          echo -e "${HIGHLIGHT}3${CL}) Both TCP and UDP"
+          echo
+          echo -n "Enter your selection [1-3]: "
+          read -r proto_selection
+          echo
           
-          if [[ $? -eq 0 ]]; then
-            description=$(whiptail --inputbox "Enter a description for this rule:" 8 60 "Custom port" 3>&1 1>&2 2>&3)
-            
-            if [[ $protocol == "tcp" ]]; then
-              ufw allow $port/tcp comment "$description"
-              msg_ok "Port $port/tcp allowed: $description"
-            elif [[ $protocol == "udp" ]]; then
-              ufw allow $port/udp comment "$description"
-              msg_ok "Port $port/udp allowed: $description"
-            else
-              ufw allow $port comment "$description"
-              msg_ok "Port $port (tcp & udp) allowed: $description"
-fi
+          case $proto_selection in
+            1) protocol="tcp" ;;
+            2) protocol="udp" ;;
+            3) protocol="both" ;;
+            *) protocol="tcp" ;;
+          esac
+          
+          echo -n "Enter a description for this rule: "
+          read -r description
+          echo
+          
+          if [[ $protocol == "tcp" ]]; then
+            ufw allow $port/tcp comment "$description"
+            msg_ok "Port $port/tcp allowed: $description"
+          elif [[ $protocol == "udp" ]]; then
+            ufw allow $port/udp comment "$description"
+            msg_ok "Port $port/udp allowed: $description"
+          else
+            ufw allow $port comment "$description"
+            msg_ok "Port $port (tcp & udp) allowed: $description"
           fi
         else
-          whiptail --title "Invalid Port" --msgbox "Please enter a valid port number between 1 and 65535." 8 70
+          echo "Please enter a valid port number between 1 and 65535."
+          echo
         fi
         
-        if ! whiptail --title "Additional Ports" --yesno "Do you want to allow another port?" 8 60; then
+        if ! get_yes_no "Do you want to allow another port?"; then
           break
         fi
       done
     fi
     
-    # VPN subnet allowance
-    vpn_subnet=""
-    if [ -f /tmp/vpn_subnet ]; then
-      vpn_subnet=$(cat /tmp/vpn_subnet)
-    fi
-    
-    if [[ ! -z "$vpn_subnet" ]]; then
-      if whiptail --title "VPN Subnet" --yesno "VPN subnet detected: $vpn_subnet\n\nDo you want to allow all traffic from this subnet?" 10 70; then
-        ufw allow from $vpn_subnet comment "VPN subnet"
-        msg_ok "Traffic from VPN subnet $vpn_subnet allowed"
-      fi
-    fi
-    
     # Enable UFW if it's not already enabled
     if [[ "$ufw_status" != *"active"* ]]; then
-      if whiptail --title "Enable Firewall" --yesno "Do you want to enable the firewall now with the configured rules?" 8 60; then
+      if get_yes_no "Do you want to enable the firewall now with the configured rules?"; then
         echo "y" | ufw enable
         msg_ok "Firewall enabled successfully"
       else
         msg_info "Firewall configured but not enabled"
       fi
     else
-      if whiptail --title "Reload Firewall" --yesno "Firewall is already active. Do you want to reload the configuration?" 8 60; then
+      if get_yes_no "Firewall is already active. Do you want to reload the configuration?"; then
         ufw reload
         msg_ok "Firewall configuration reloaded"
       fi
     fi
     
     # Show UFW rules summary
-    ufw_rules=$(ufw status verbose)
-    whiptail --title "Firewall Rules Summary" --scrolltext --msgbox "Current firewall configuration:\n\n$ufw_rules" 20 78
+    echo "Current firewall configuration:"
+    echo
+    ufw status verbose
+    echo
   else
     msg_info "Firewall configuration skipped"
   fi
@@ -494,14 +564,14 @@ detect_and_add_service_rules() {
   
   # If we found services, ask user to confirm adding rules
   if [ ${#detected_services[@]} -gt 0 ]; then
-    # Build the message for whiptail
-    services_message="Detected installed services:\n\n"
+    echo "Detected installed services:"
+    echo
     for ((i=0; i<${#detected_services[@]}; i+=4)); do
-      services_message+="• ${detected_services[i]}: Port ${detected_services[i+1]}/$(printf '%s' "${detected_services[i+2]}")\n"
+      echo -e "• ${detected_services[i]}: Port ${HIGHLIGHT}${detected_services[i+1]}/${detected_services[i+2]}${CL}"
     done
-    services_message+="\nWould you like to add firewall rules for these services?"
+    echo
     
-    if whiptail --title "Detected Services" --yesno "$services_message" 15 70; then
+    if get_yes_no "Would you like to add firewall rules for these services?"; then
       for ((i=0; i<${#detected_services[@]}; i+=4)); do
         service=${detected_services[i]}
         port=${detected_services[i+1]}
@@ -523,7 +593,7 @@ detect_and_add_service_rules() {
 
 # Setup Fail2Ban function
 setup_fail2ban() {
-  if whiptail --title "Fail2Ban Installation" --yesno "Would you like to install and configure Fail2Ban?\n\nFail2Ban is a tool that helps protect your server against brute-force attacks." 10 70; then
+  if get_yes_no "Would you like to install and configure Fail2Ban? It helps protect your server against brute-force attacks."; then
     msg_info "Installing Fail2Ban..."
     apt install -y fail2ban
     
@@ -531,30 +601,34 @@ setup_fail2ban() {
     cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
     
     # Configure Fail2Ban settings
-    ban_time=$(whiptail --inputbox "Enter ban time in seconds (default: 600):" 8 60 "600" 3>&1 1>&2 2>&3)
-    find_time=$(whiptail --inputbox "Enter find time in seconds (default: 600):" 8 60 "600" 3>&1 1>&2 2>&3)
-    max_retry=$(whiptail --inputbox "Enter max retry attempts (default: 5):" 8 60 "5" 3>&1 1>&2 2>&3)
+    echo -n "Enter ban time in seconds (default: 600): "
+    read -r ban_time
+    ban_time=${ban_time:-600}
+    echo
     
-    # Apply settings
-    if [[ $? -eq 0 ]]; then
-      # Get additional IP whitelist
-      additional_ips=$(whiptail --inputbox "Enter additional IPs to whitelist (space-separated):" 8 70 "" 3>&1 1>&2 2>&3)
-      
-      # Always include localhost
-      whitelist_ips="127.0.0.1 ::1"
-      if [[ ! -z "$additional_ips" ]]; then
-        whitelist_ips="$whitelist_ips $additional_ips"
-      fi
-      
-      # Add VPN subnet if available
-      vpn_subnet=""
-      if [ -f /tmp/vpn_subnet ]; then
-        vpn_subnet=$(cat /tmp/vpn_subnet)
-        whitelist_ips="$whitelist_ips $vpn_subnet"
-      fi
-      
-      # Create custom config
-      cat > /etc/fail2ban/jail.local << EOF
+    echo -n "Enter find time in seconds (default: 600): "
+    read -r find_time
+    find_time=${find_time:-600}
+    echo
+    
+    echo -n "Enter max retry attempts (default: 5): "
+    read -r max_retry
+    max_retry=${max_retry:-5}
+    echo
+    
+    # Get additional IP whitelist
+    echo -n "Enter additional IPs to whitelist (space-separated, leave empty for none): "
+    read -r additional_ips
+    echo
+    
+    # Always include localhost
+    whitelist_ips="127.0.0.1 ::1"
+    if [[ ! -z "$additional_ips" ]]; then
+      whitelist_ips="$whitelist_ips $additional_ips"
+    fi
+    
+    # Create custom config
+    cat > /etc/fail2ban/jail.local << EOF
 [DEFAULT]
 # Ban hosts for $ban_time seconds
 bantime = $ban_time
@@ -572,29 +646,23 @@ filter = sshd
 logpath = /var/log/auth.log
 maxretry = $max_retry
 EOF
-      
-      # Enable and start Fail2Ban
-      systemctl enable fail2ban
-      systemctl restart fail2ban
-      
-      msg_ok "Fail2Ban installed and configured"
-      
-      # Show status
-      fail2ban_status=$(fail2ban-client status)
-      jails=$(fail2ban-client status | grep "Jail list" | sed 's/^.*: //')
-      
-      jail_status=""
-      for jail in $jails; do
-        jail_info=$(fail2ban-client status $jail)
-        jail_status="${jail_status}\n\n[$jail]\n${jail_info}"
-      done
-      
-      whiptail --title "Fail2Ban Status" --msgbox "Fail2Ban has been installed and configured with:\n\nBan time: $ban_time seconds\nFind time: $find_time seconds\nMax retries: $max_retry\nWhitelisted IPs: $whitelist_ips\n$jail_status" 20 78
-    else
-      msg_info "Using default Fail2Ban configuration"
-      systemctl enable fail2ban
-      systemctl restart fail2ban
-    fi
+    
+    # Enable and start Fail2Ban
+    systemctl enable fail2ban
+    systemctl restart fail2ban
+    
+    msg_ok "Fail2Ban installed and configured"
+    
+    # Save the command for adding VPN subnet to whitelist for later
+    echo "To add a VPN subnet to the Fail2Ban whitelist later, use:" > "$TEMP_DIR/fail2ban_vpn.txt"
+    echo "sudo fail2ban-client set sshd addignoreip VPN_SUBNET" >> "$TEMP_DIR/fail2ban_vpn.txt"
+    echo "# Example: sudo fail2ban-client set sshd addignoreip 10.8.0.0/24" >> "$TEMP_DIR/fail2ban_vpn.txt"
+    
+    # Show status
+    echo "Fail2Ban status:"
+    echo
+    fail2ban-client status sshd
+    echo
   else
     msg_info "Fail2Ban installation skipped"
   fi
@@ -606,11 +674,15 @@ EOF
 
 # Setup VPN function
 setup_vpn() {
-  vpn_choice=$(whiptail --title "VPN Setup" --menu \
-    "Would you like to set up a VPN for secure remote access?" 15 60 3 \
-    "1" "Tailscale (easy to use, managed service)" \
-    "2" "Netbird (open-source, self-hostable)" \
-    "3" "Skip VPN setup" 3>&1 1>&2 2>&3)
+  echo "VPN Setup:"
+  echo
+  echo -e "${HIGHLIGHT}1${CL}) Tailscale (easy to use, managed service)"
+  echo -e "${HIGHLIGHT}2${CL}) Netbird (open-source, self-hostable)"
+  echo -e "${HIGHLIGHT}3${CL}) Skip VPN setup"
+  echo
+  echo -n "Select an option [1-3]: "
+  read -r vpn_choice
+  echo
   
   case $vpn_choice in
     1)
@@ -639,8 +711,10 @@ setup_tailscale() {
     msg_ok "Tailscale installed successfully"
     
     auth_key=""
-    if whiptail --title "Tailscale Authentication" --yesno "Do you have a Tailscale auth key?\n\nIf not, select 'No' and you'll be given a URL to authenticate manually." 10 70; then
-      auth_key=$(whiptail --inputbox "Enter your Tailscale auth key:" 8 70 3>&1 1>&2 2>&3)
+    if get_yes_no "Do you have a Tailscale auth key? If not, select 'n' and you'll be given a URL to authenticate manually."; then
+      echo -n "Enter your Tailscale auth key: "
+      read -r auth_key
+      echo
     fi
     
     if [[ ! -z "$auth_key" ]]; then
@@ -650,15 +724,19 @@ setup_tailscale() {
       # Start Tailscale without auth key
       tailscale up
       msg_info "Tailscale started. Please authenticate using the URL above."
-      read -p "Press Enter once you've authenticated... "
+      echo -n "Press Enter once you've authenticated... "
+      read
+      echo
     fi
     
     # Get Tailscale IP and subnet
     tailscale_ip=$(tailscale ip)
     tailscale_subnet="100.64.0.0/10"  # Default Tailscale subnet
     
-    # Save subnet for firewall rules
-    echo "$tailscale_subnet" > /tmp/vpn_subnet
+    # Save command for allowing VPN subnet in firewall for later
+    mkdir -p "$TEMP_DIR"
+    echo "# To allow traffic from the Tailscale VPN subnet in UFW:" > "$TEMP_DIR/vpn_firewall.txt"
+    echo "sudo ufw allow from $tailscale_subnet comment 'Tailscale VPN subnet'" >> "$TEMP_DIR/vpn_firewall.txt"
     
     # Create info file for summary
     mkdir -p "$TEMP_DIR/info"
@@ -669,9 +747,21 @@ Your Tailscale IP: $tailscale_ip
 Tailscale subnet: $tailscale_subnet
 
 You can now connect to this server securely via the Tailscale network.
+
+To allow all traffic from the Tailscale subnet in your firewall:
+sudo ufw allow from $tailscale_subnet comment 'Tailscale VPN subnet'
+
+To add the Tailscale subnet to Fail2Ban whitelist:
+sudo fail2ban-client set sshd addignoreip $tailscale_subnet
 EOF
 
-    whiptail --title "Tailscale Configured" --msgbox "Tailscale has been successfully configured.\n\nYour Tailscale IP: $tailscale_ip\nTailscale subnet: $tailscale_subnet\n\nYou can now connect to this server securely via the Tailscale network." 12 70
+    echo "Tailscale has been successfully configured."
+    echo
+    echo -e "Your Tailscale IP: ${HIGHLIGHT}$tailscale_ip${CL}"
+    echo -e "Tailscale subnet: ${HIGHLIGHT}$tailscale_subnet${CL}"
+    echo
+    echo "You can now connect to this server securely via the Tailscale network."
+    echo
   else
     msg_error "Tailscale installation failed"
   fi
@@ -687,7 +777,9 @@ setup_netbird() {
   if [[ $? -eq 0 ]]; then
     msg_ok "Netbird installed successfully"
     
-    setup_key=$(whiptail --inputbox "Enter your Netbird setup key:" 8 70 3>&1 1>&2 2>&3)
+    echo -n "Enter your Netbird setup key: "
+    read -r setup_key
+    echo
     
     if [[ ! -z "$setup_key" ]]; then
       netbird up --setup-key "$setup_key"
@@ -695,273 +787,13 @@ setup_netbird() {
       
       # Get Netbird IP and subnet
       netbird_ip=$(ip addr show netbird0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "Unknown")
-      netbird_subnet=$(whiptail --inputbox "Enter your Netbird IP range (e.g., 100.92.0.0/16):" 8 70 "100.92.0.0/16" 3>&1 1>&2 2>&3)
       
-      # Save subnet for firewall rules
-      echo "$netbird_subnet" > /tmp/vpn_subnet
+      echo -n "Enter your Netbird IP range (e.g., 100.92.0.0/16): "
+      read -r netbird_subnet
+      netbird_subnet=${netbird_subnet:-"100.92.0.0/16"}
+      echo
       
-      # Create info file for summary
-      mkdir -p "$TEMP_DIR/info"
-      cat > "$TEMP_DIR/info/netbird.txt" << EOF
-Netbird VPN has been configured successfully.
-
-Your Netbird IP: $netbird_ip
-Netbird subnet: $netbird_subnet
-
-You can now connect to this server securely via the Netbird network.
-EOF
-
-      whiptail --title "Netbird Configured" --msgbox "Netbird has been successfully configured.\n\nYour Netbird IP: $netbird_ip\nNetbird subnet: $netbird_subnet\n\nYou can now connect to this server securely via the Netbird network." 12 70
-    else
-      msg_error "Netbird setup key not provided"
-    fi
-  else
-    msg_error "Netbird installation failed"
-  fi
-}
-
-##############################
-# 5. AUTOMATIC SECURITY UPDATES
-##############################
-
-# Function to set up automatic security updates
-setup_auto_updates() {
-  if whiptail --title "Automatic Updates" --yesno "Would you like to configure automatic security updates?" 8 70; then
-    msg_info "Setting up unattended-upgrades..."
-    
-    # Install required packages
-    apt install -y unattended-upgrades apt-listchanges
-    
-    # Configure automatic updates
-    cat > /etc/apt/apt.conf.d/20auto-upgrades << EOF
-APT::Periodic::Update-Package-Lists "1";
-APT::Periodic::Unattended-Upgrade "1";
-APT::Periodic::AutocleanInterval "7";
-EOF
-    
-    # Ask about automatic reboot if needed
-    if whiptail --title "Automatic Reboot" --yesno "Would you like to enable automatic reboot when necessary?\n\nThis will reboot the system automatically if an update requires it." 10 70; then
-      sed -i 's|//Unattended-Upgrade::Automatic-Reboot "false";|Unattended-Upgrade::Automatic-Reboot "true";|' /etc/apt/apt.conf.d/50unattended-upgrades
-      
-      # Ask about reboot time
-      reboot_time=$(whiptail --inputbox "Enter preferred reboot time (24-hour format, e.g., 02:00):" 8 70 "02:00" 3>&1 1>&2 2>&3)
-      if [[ $? -eq 0 && ! -z "$reboot_time" ]]; then
-        sed -i "s|//Unattended-Upgrade::Automatic-Reboot-Time \"02:00\";|Unattended-Upgrade::Automatic-Reboot-Time \"$reboot_time\";|" /etc/apt/apt.conf.d/50unattended-upgrades
-      fi
-      
-      msg_ok "Automatic reboot configured for $reboot_time"
-    else
-      sed -i 's|//Unattended-Upgrade::Automatic-Reboot "false";|Unattended-Upgrade::Automatic-Reboot "false";|' /etc/apt/apt.conf.d/50unattended-upgrades
-      msg_info "Automatic reboot not enabled"
-    fi
-    
-    # Restart unattended-upgrades service
-    systemctl restart unattended-upgrades
-    
-    # Create info file for summary
-    mkdir -p "$TEMP_DIR/info"
-    cat > "$TEMP_DIR/info/auto-updates.txt" << EOF
-Automatic security updates have been configured.
-
-Package lists update: Daily
-Security updates: Enabled
-Cleanup interval: Weekly
-Automatic reboot: $(grep -q "Automatic-Reboot \"true\"" /etc/apt/apt.conf.d/50unattended-upgrades && echo "Enabled at $reboot_time" || echo "Disabled")
-EOF
-
-    msg_ok "Automatic security updates configured successfully"
-  else
-    msg_info "Automatic security updates not configured"
-  fi
-}
-
-#########################
-# SUMMARY AND COMPLETION
-#########################
-
-# Function to display security summary
-display_security_summary() {
-  # Get server IP
-  server_ip=$(hostname -I | awk '{print $1}')
-  
-  # Build summary information
-  summary="=== Debian Express Security Summary ===\n\n"
-  summary+="System Information:\n"
-  summary+="• Hostname: $(hostname)\n"
-  summary+="• IP Address: $server_ip\n"
-  summary+="• OS: $(lsb_release -ds)\n\n"
-  
-  # Check what was configured
-  summary+="Security Configuration:\n"
-  
-  # SSH status
-  if [ -f /etc/ssh/sshd_config.d/50-security.conf ]; then
-    summary+="• SSH: Hardened configuration applied\n"
-    if grep -q "PasswordAuthentication no" /etc/ssh/sshd_config.d/50-security.conf; then
-      summary+="  - Password authentication: Disabled\n"
-    else
-      summary+="  - Password authentication: Enabled\n"
-    fi
-    if grep -q "PermitRootLogin no" /etc/ssh/sshd_config.d/50-security.conf; then
-      summary+="  - Root login: Disabled\n"
-    fi
-    if grep -q "AllowUsers" /etc/ssh/sshd_config.d/50-security.conf; then
-      allowed_users=$(grep "AllowUsers" /etc/ssh/sshd_config.d/50-security.conf | cut -d' ' -f2-)
-      summary+="  - Allowed users: $allowed_users\n"
-    fi
-  else
-    summary+="• SSH: Standard configuration\n"
-  fi
-  
-  # Passwordless sudo
-  if ls /etc/sudoers.d/99-*-nopasswd 2>/dev/null >/dev/null; then
-    passwordless_users=$(ls /etc/sudoers.d/99-*-nopasswd | sed 's/.*99-\(.*\)-nopasswd/\1/')
-    summary+="• Passwordless sudo: Enabled for users: $passwordless_users\n"
-  else
-    summary+="• Passwordless sudo: Not configured\n"
-  fi
-  
-  # Firewall status
-  ufw_status=$(ufw status | head -1)
-  if [[ "$ufw_status" == *"active"* ]]; then
-    summary+="• Firewall (UFW): Enabled\n"
-    # Get firewall rules and format them
-    ufw_rules=$(ufw status | grep -v "Status:" | sed 's/^/    /')
-    summary+="  - Rules:\n$ufw_rules\n"
-  else
-    summary+="• Firewall (UFW): Disabled\n"
-  fi
-  
-  # Fail2Ban status
-  if systemctl is-active --quiet fail2ban; then
-    summary+="• Fail2Ban: Active\n"
-    if [ -f /etc/fail2ban/jail.local ]; then
-      ban_time=$(grep "^bantime" /etc/fail2ban/jail.local | head -1 | awk '{print $3}')
-      find_time=$(grep "^findtime" /etc/fail2ban/jail.local | head -1 | awk '{print $3}')
-      max_retry=$(grep "^maxretry" /etc/fail2ban/jail.local | head -1 | awk '{print $3}')
-      summary+="  - Settings: Ban time = ${ban_time}s, Find time = ${find_time}s, Max retries = $max_retry\n"
-    fi
-  else
-    summary+="• Fail2Ban: Not configured\n"
-  fi
-  
-  # VPN status
-  if systemctl is-active --quiet tailscale; then
-    summary+="• VPN: Tailscale active (IP: $(tailscale ip))\n"
-  elif systemctl is-active --quiet netbird; then
-    summary+="• VPN: Netbird active\n"
-  else
-    summary+="• VPN: Not configured\n"
-  fi
-  
-  # Automatic updates
-  if [ -f /etc/apt/apt.conf.d/20auto-upgrades ]; then
-    summary+="• Automatic updates: Configured\n"
-    if grep -q "Automatic-Reboot \"true\"" /etc/apt/apt.conf.d/50unattended-upgrades; then
-      reboot_time=$(grep "Automatic-Reboot-Time" /etc/apt/apt.conf.d/50unattended-upgrades | grep -v "^//" | sed 's/.*"\(.*\)".*/\1/')
-      summary+="  - Automatic reboot: Enabled ($reboot_time)\n"
-    else
-      summary+="  - Automatic reboot: Disabled\n"
-    fi
-  else
-    summary+="• Automatic updates: Not configured\n"
-  fi
-  
-  # Add detailed information if available
-  if [ -d "$TEMP_DIR/info" ]; then
-    summary+="\n=== Detailed Information ===\n\n"
-    
-    # Add VPN info
-    if [ -f "$TEMP_DIR/info/tailscale.txt" ]; then
-      summary+="Tailscale VPN:\n"
-      summary+=$(cat "$TEMP_DIR/info/tailscale.txt")
-      summary+="\n\n"
-    elif [ -f "$TEMP_DIR/info/netbird.txt" ]; then
-      summary+="Netbird VPN:\n"
-      summary+=$(cat "$TEMP_DIR/info/netbird.txt")
-      summary+="\n\n"
-    fi
-    
-    # Add auto-updates info
-    if [ -f "$TEMP_DIR/info/auto-updates.txt" ]; then
-      summary+="Automatic Updates:\n"
-      summary+=$(cat "$TEMP_DIR/info/auto-updates.txt")
-      summary+="\n\n"
-    fi
-  fi
-  
-  # Display final summary
-  whiptail --title "Security Setup Complete" --scrolltext --msgbox "$summary" 24 78
-  
-  # Ask if user wants to save the summary to a file
-  if whiptail --title "Save Summary" --yesno "Would you like to save this summary to a file?" 8 60; then
-    summary_file="/root/debian-express-security-summary.txt"
-    echo -e "$summary" > "$summary_file"
-    chmod 600 "$summary_file"
-    msg_ok "Summary saved to $summary_file"
-  fi
-}
-
-# Function to clean up and complete setup
-finalize_security_setup() {
-  msg_info "Finalizing security setup..."
-  
-  # System cleanup
-  apt autoremove -y
-  apt clean
-  
-  # Generate and display the summary
-  display_security_summary
-  
-  msg_ok "Debian Express Security setup completed successfully!"
-  echo
-  echo "Your server has been secured according to your preferences."
-  echo "Please review the summary information provided."
-  echo
-  echo "For security changes to fully apply, it's recommended to reboot your server."
-  echo
-  read -p "Would you like to reboot now? (y/N): " reboot_choice
-  if [[ "$reboot_choice" =~ ^[Yy]$ ]]; then
-    echo "Rebooting system in 5 seconds..."
-    sleep 5
-    reboot
-  else
-    echo "Please remember to reboot your system manually when convenient."
-  fi
-}
-
-# Main function to orchestrate the security setup process
-main() {
-  check_root
-  check_debian_based
-  display_banner
-  detect_os
-  check_setup_script
-  
-  # Confirmation to proceed
-  if ! whiptail --title "Debian Express Security" --yesno "This script will help you secure your Debian-based server.\n\nDo you want to proceed?" 10 70; then
-    echo "Setup cancelled. No changes were made."
-    exit 0
-  fi
-  
-  # SSH hardening
-  configure_ssh_security
-  
-  # Firewall configuration
-  configure_firewall
-  
-  # Install and configure Fail2Ban
-  setup_fail2ban
-  
-  # VPN setup
-  setup_vpn
-  
-  # Automatic security updates
-  setup_auto_updates
-  
-  # Finalize setup
-  finalize_security_setup
-}
-
-# Run the main function
-main "$@"
+      # Save command for allowing VPN subnet in firewall for later
+      mkdir -p "$TEMP_DIR"
+      echo "# To allow traffic from the Netbird VPN subnet in UFW:" > "$TEMP_DIR/vpn_firewall.txt"
+      echo "sudo ufw allow from $netbird_subnet comment 'Netbird VPN subnet'" >> "$TEMP_DIR/
