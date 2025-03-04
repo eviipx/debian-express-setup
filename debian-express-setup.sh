@@ -58,7 +58,7 @@ get_yes_no() {
   local response
   
   while true; do
-    echo -e -n "${prompt} (y/n): "
+    echo -e -n "${prompt} (${GN}y${CL}/${RD}n${CL}): "
     read -r response
     case $response in
       [Yy]* ) echo; return 0 ;;
@@ -295,9 +295,9 @@ configure_swap() {
     echo -e "Recommended swap: ${HIGHLIGHT}${recommended_swap}MB${CL}"
     echo
     echo "What would you like to do?"
-    echo "1) Keep current swap configuration"
-    echo "2) Resize swap to recommended size (${recommended_swap}MB)"
-    echo "3) Set a custom swap size"
+    echo -e "${HIGHLIGHT}1${CL}) Keep current swap configuration"
+    echo -e "${HIGHLIGHT}2${CL}) Resize swap to recommended size (${recommended_swap}MB)"
+    echo -e "${HIGHLIGHT}3${CL}) Set a custom swap size"
     echo
     echo -n "Enter option [1-3]: "
     read -r swap_option
@@ -333,9 +333,9 @@ configure_swap() {
     echo -e "Recommended swap: ${HIGHLIGHT}${recommended_swap}MB${CL}"
     echo
     echo "What would you like to do?"
-    echo "1) Create swap with recommended size (${recommended_swap}MB)"
-    echo "2) Create swap with custom size"
-    echo "3) Do not create swap"
+    echo -e "${HIGHLIGHT}1${CL}) Create swap with recommended size (${recommended_swap}MB)"
+    echo -e "${HIGHLIGHT}2${CL}) Create swap with custom size"
+    echo -e "${HIGHLIGHT}3${CL}) Do not create swap"
     echo
     echo -n "Enter option [1-3]: "
     read -r swap_option
@@ -487,7 +487,6 @@ setup_monitoring_tools() {
   if get_yes_no "Would you like to install a set of tools for system information, monitoring, and internet speed testing?"; then
     msg_info "Installing system monitoring and utility tools..."
     
-    # Install fastfetch (system information)
     echo "Installing system monitoring tools..."
     
     # Install fastfetch
