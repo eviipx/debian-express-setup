@@ -133,19 +133,26 @@ check_setup_script() {
 detect_services() {
   msg_info "Detecting installed services..."
   
+  # Initialize tracking variables
+  declare -A DETECTED_SERVICES
+  DETECTED_SERVICES_LIST=""
+  
   # Read from the state file created by the setup script
   if [ -f "$STATE_FILE" ]; then
     while IFS=: read -r service port; do
       if [ -n "$service" ] && [ -n "$port" ]; then
-        DETECTED_SERVICES["$service"]="$port"
-        DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• ${service^}: Port ${HIGHLIGHT}${port}${CL}\n"
+        # Only add if not already detected
+        if [ -z "${DETECTED_SERVICES[$service]}" ]; then
+          DETECTED_SERVICES["$service"]="$port"
+          DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• ${service^}: Port ${HIGHLIGHT}${port}${CL}\n"
+        fi
       fi
     done < "$STATE_FILE"
   fi
   
   # Check for common services that might not be in the state file
   # Webmin
-  if systemctl is-active --quiet webmin || [ -f /etc/webmin/miniserv.conf ]; then
+  if (systemctl is-active --quiet webmin || [ -f /etc/webmin/miniserv.conf ]) && [ -z "${DETECTED_SERVICES[webmin]}" ]; then
     webmin_port=$(grep "^port=" /etc/webmin/miniserv.conf 2>/dev/null | cut -d= -f2)
     webmin_port=${webmin_port:-10000}  # Default to 10000 if not found
     DETECTED_SERVICES["webmin"]="$webmin_port"
@@ -153,29 +160,31 @@ detect_services() {
   fi
   
   # Nginx
-  if systemctl is-active --quiet nginx; then
+  if systemctl is-active --quiet nginx && [ -z "${DETECTED_SERVICES[nginx]}" ]; then
     DETECTED_SERVICES["nginx"]="80,443"
     DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Nginx: Ports ${HIGHLIGHT}80,443${CL}\n"
   fi
   
   # Apache
-  if systemctl is-active --quiet apache2; then
+  if systemctl is-active --quiet apache2 && [ -z "${DETECTED_SERVICES[apache2]}" ]; then
     DETECTED_SERVICES["apache2"]="80,443"
     DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Apache: Ports ${HIGHLIGHT}80,443${CL}\n"
   fi
   
   # Docker
-  if systemctl is-active --quiet docker; then
+  if systemctl is-active --quiet docker && [ -z "${DETECTED_SERVICES[docker]}" ]; then
     DETECTED_SERVICES["docker"]="N/A"
     DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Docker: Running${CL}\n"
     
     # Check for docker containers with exposed ports
     if command -v docker >/dev/null; then
-      container_info=$(docker ps --format "{{.Names}}: {{.Ports}}" 2>/dev/null)
+      container_info=$(docker ps --format "{{.Names}}: {{.Ports}}" 2>/dev/null | grep -v "^$")
       if [ -n "$container_info" ]; then
         DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Docker containers with exposed ports:\n"
         while IFS= read -r line; do
-          DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}  - $line\n"
+          if [ -n "$line" ]; then
+            DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}  - $line\n"
+          fi
         done <<< "$container_info"
       fi
     fi
