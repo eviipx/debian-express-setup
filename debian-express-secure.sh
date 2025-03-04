@@ -2,7 +2,6 @@
 
 # Debian Express Secure
 # Security & Network Configuration Script
-# Author: [Your Name]
 # License: MIT
 # Description: Secures and configures networking for Debian-based servers
 
@@ -20,8 +19,14 @@ HIGHLIGHT="${BL}"
 # Create a temporary directory for storing installation states
 TEMP_DIR="/tmp/debian-express"
 STATE_FILE="$TEMP_DIR/installed-services.txt"
+SUMMARY_FILE="$TEMP_DIR/security-summary.txt"
 mkdir -p "$TEMP_DIR"
 touch "$STATE_FILE"
+touch "$SUMMARY_FILE"
+
+# Detected services tracking
+declare -A DETECTED_SERVICES
+DETECTED_SERVICES_LIST=""
 
 # Function to display success messages
 msg_ok() {
@@ -124,6 +129,67 @@ check_setup_script() {
   fi
 }
 
+# Function to detect services from state file and running processes
+detect_services() {
+  msg_info "Detecting installed services..."
+  
+  # Read from the state file created by the setup script
+  if [ -f "$STATE_FILE" ]; then
+    while IFS=: read -r service port; do
+      if [ -n "$service" ] && [ -n "$port" ]; then
+        DETECTED_SERVICES["$service"]="$port"
+        DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• ${service^}: Port ${HIGHLIGHT}${port}${CL}\n"
+      fi
+    done < "$STATE_FILE"
+  fi
+  
+  # Check for common services that might not be in the state file
+  # Webmin
+  if systemctl is-active --quiet webmin || [ -f /etc/webmin/miniserv.conf ]; then
+    webmin_port=$(grep "^port=" /etc/webmin/miniserv.conf 2>/dev/null | cut -d= -f2)
+    webmin_port=${webmin_port:-10000}  # Default to 10000 if not found
+    DETECTED_SERVICES["webmin"]="$webmin_port"
+    DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Webmin: Port ${HIGHLIGHT}${webmin_port}${CL}\n"
+  fi
+  
+  # Nginx
+  if systemctl is-active --quiet nginx; then
+    DETECTED_SERVICES["nginx"]="80,443"
+    DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Nginx: Ports ${HIGHLIGHT}80,443${CL}\n"
+  fi
+  
+  # Apache
+  if systemctl is-active --quiet apache2; then
+    DETECTED_SERVICES["apache2"]="80,443"
+    DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Apache: Ports ${HIGHLIGHT}80,443${CL}\n"
+  fi
+  
+  # Docker
+  if systemctl is-active --quiet docker; then
+    DETECTED_SERVICES["docker"]="N/A"
+    DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Docker: Running${CL}\n"
+    
+    # Check for docker containers with exposed ports
+    if command -v docker >/dev/null; then
+      container_info=$(docker ps --format "{{.Names}}: {{.Ports}}" 2>/dev/null)
+      if [ -n "$container_info" ]; then
+        DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Docker containers with exposed ports:\n"
+        while IFS= read -r line; do
+          DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}  - $line\n"
+        done <<< "$container_info"
+      fi
+    fi
+  fi
+  
+  # If we found services, show them
+  if [ -n "$DETECTED_SERVICES_LIST" ]; then
+    echo "Detected installed services:"
+    echo -e "$DETECTED_SERVICES_LIST"
+  else
+    echo "No services detected."
+  fi
+}
+
 ###################
 # 1. SSH HARDENING
 ###################
@@ -141,52 +207,119 @@ configure_ssh_security() {
   # Backup existing configuration
   cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup.$(date +%F)
   
-  # SSH hardening options
-  echo "Select SSH security options to configure:"
-  echo
-  echo -e "${HIGHLIGHT}1${CL}) Disable root SSH login (recommended)"
-  echo -e "${HIGHLIGHT}2${CL}) Enable public key authentication (recommended)"
-  echo -e "${HIGHLIGHT}3${CL}) Disable password authentication (requires SSH keys)"
-  echo -e "${HIGHLIGHT}4${CL}) Limit SSH access to specific users"
-  echo -e "${HIGHLIGHT}5${CL}) Set up SSH keys for a user"
-  echo
-  echo "Enter your selections (e.g., 125 for options 1, 2, and 5):"
-  read -r ssh_selections
-  echo
-  
   # Create directory for custom SSH config
   mkdir -p /etc/ssh/sshd_config.d
   
-  # Process SSH options
-  if [[ $ssh_selections == *"1"* ]]; then
-    echo "PermitRootLogin no" > /etc/ssh/sshd_config.d/50-security.conf
-    msg_ok "Root SSH login disabled"
-  fi
+  # Step 1: Check for non-root users before disabling root login
+  existing_users=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd | sort)
+  current_user=$(whoami)
   
-  if [[ $ssh_selections == *"2"* ]]; then
-    echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config.d/50-security.conf
-    msg_ok "Public key authentication enabled"
-  fi
-  
-  if [[ $ssh_selections == *"3"* ]]; then
-    # Check if we're setting up SSH keys to prevent lockouts
-    if [[ $ssh_selections != *"5"* ]]; then
-      if ! get_yes_no "You're about to disable password authentication without setting up SSH keys. This could lock you out of your server if SSH keys aren't already configured. Are you sure you want to continue?"; then
-        msg_info "Password authentication remains enabled"
+  if [ "$current_user" = "root" ] && [ -z "$existing_users" ]; then
+    msg_error "No non-root users detected. Creating a non-root user is required before disabling root login."
+    echo "Would you like to create a non-root user with sudo privileges now?"
+    if get_yes_no "Create a non-root sudo user?"; then
+      echo -n "Enter username for new sudo user: "
+      read -r new_username
+      echo
+      
+      if [ -z "$new_username" ]; then
+        msg_error "No username provided. Keeping root login enabled."
       else
-        echo "PasswordAuthentication no" >> /etc/ssh/sshd_config.d/50-security.conf
-        msg_ok "Password authentication disabled"
+        adduser "$new_username"
+        usermod -aG sudo "$new_username"
+        apt install -y sudo  # Ensure sudo is installed
+        msg_ok "User $new_username created with sudo privileges"
+        existing_users="$new_username"
       fi
     else
-      echo "PasswordAuthentication no" >> /etc/ssh/sshd_config.d/50-security.conf
-      msg_ok "Password authentication disabled"
+      msg_info "Keeping root login enabled. It's recommended to create a non-root user before disabling root login."
     fi
   fi
   
-  if [[ $ssh_selections == *"4"* ]]; then
-    # Get list of non-system users
-    existing_users=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd | sort)
+  # Now check if we can safely disable root login
+  if [ "$current_user" != "root" ] || [ -n "$existing_users" ]; then
+    if get_yes_no "Disable root SSH login? (Recommended for security)"; then
+      echo "PermitRootLogin no" > /etc/ssh/sshd_config.d/50-security.conf
+      msg_ok "Root SSH login disabled"
+      echo "Root SSH login: Disabled" >> "$SUMMARY_FILE"
+    else
+      msg_info "Root SSH login remains enabled"
+      echo "Root SSH login: Enabled" >> "$SUMMARY_FILE"
+    fi
+  fi
+  
+  # Step 2: SSH key setup
+  echo "Checking for existing SSH keys..."
+  
+  has_ssh_keys=false
+  for user in $existing_users; do
+    user_home=$(eval echo ~${user})
+    if [ -f "${user_home}/.ssh/authorized_keys" ] && [ -s "${user_home}/.ssh/authorized_keys" ]; then
+      has_ssh_keys=true
+      msg_ok "SSH keys found for user: $user"
+    fi
+  done
+  
+  if [ "$has_ssh_keys" = false ]; then
+    msg_info "No SSH keys detected for any users"
     
+    if get_yes_no "Would you like to set up SSH key authentication? (Recommended)"; then
+      while true; do
+        setup_ssh_keys
+        
+        # Check if keys were setup successfully
+        for user in $existing_users; do
+          user_home=$(eval echo ~${user})
+          if [ -f "${user_home}/.ssh/authorized_keys" ] && [ -s "${user_home}/.ssh/authorized_keys" ]; then
+            has_ssh_keys=true
+            msg_ok "SSH keys verified for user: $user"
+            echo "SSH keys: Configured for user $user" >> "$SUMMARY_FILE"
+            break
+          fi
+        done
+        
+        if [ "$has_ssh_keys" = true ]; then
+          break
+        else
+          if get_yes_no "SSH keys not detected. Would you like to try again?"; then
+            continue
+          else
+            msg_info "Skipping SSH key setup"
+            echo "SSH keys: Not configured" >> "$SUMMARY_FILE"
+            break
+          fi
+        fi
+      done
+    else
+      echo "SSH keys: Not configured" >> "$SUMMARY_FILE"
+    fi
+  else
+    echo "SSH keys: Already configured" >> "$SUMMARY_FILE"
+  fi
+  
+  # Step 3: Enable public key authentication
+  echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config.d/50-security.conf
+  msg_ok "Public key authentication enabled"
+  echo "Public key authentication: Enabled" >> "$SUMMARY_FILE"
+  
+  # Step 4: Disable password authentication (only if SSH keys are set up)
+  if [ "$has_ssh_keys" = true ]; then
+    if get_yes_no "SSH keys detected. Would you like to disable password authentication? (Recommended when using SSH keys)"; then
+      echo "PasswordAuthentication no" >> /etc/ssh/sshd_config.d/50-security.conf
+      msg_ok "Password authentication disabled"
+      echo "Password authentication: Disabled" >> "$SUMMARY_FILE"
+    else
+      msg_info "Password authentication remains enabled"
+      echo "Password authentication: Enabled" >> "$SUMMARY_FILE"
+    fi
+  else
+    msg_info "Password authentication remains enabled (SSH keys not detected)"
+    echo "Password authentication: Enabled" >> "$SUMMARY_FILE"
+  fi
+  
+  # Step 5: Limit SSH access to specific users
+  if get_yes_no "Would you like to limit SSH access to specific users?"; then
+    # Get list of non-system users
     if [ -z "$existing_users" ]; then
       msg_error "No non-system users found"
     else
@@ -220,19 +353,19 @@ configure_ssh_security() {
         formatted_users=$(echo $selected_users | tr ' ' ',')
         echo "AllowUsers $formatted_users" >> /etc/ssh/sshd_config.d/50-security.conf
         msg_ok "SSH access limited to: $formatted_users"
+        echo "SSH access limited to: $formatted_users" >> "$SUMMARY_FILE"
       else
         msg_info "No valid users selected"
       fi
     fi
+  else
+    echo "SSH access: Not limited to specific users" >> "$SUMMARY_FILE"
   fi
   
-  # Set up SSH keys for a user if selected
-  if [[ $ssh_selections == *"5"* ]]; then
-    setup_ssh_keys
+  # Step 6: Setup passwordless sudo if using SSH keys
+  if [ "$has_ssh_keys" = true ]; then
+    setup_passwordless_sudo
   fi
-  
-  # After configuring SSH, ask about passwordless sudo
-  setup_passwordless_sudo
   
   # Restart SSH service
   systemctl restart ssh
@@ -282,48 +415,53 @@ setup_ssh_keys() {
     
     echo "To set up SSH key authentication for $username:"
     echo
-    echo "1. ON YOUR LOCAL MACHINE, first generate an SSH key if you don't already have one:"
-    echo 
-    echo "   ssh-keygen -t ed25519 -C \"email@example.com\""
-    echo "   or"
-    echo "   ssh-keygen -t rsa -b 4096 -C \"email@example.com\""
+    echo "1. ON YOUR LOCAL MACHINE, first generate an SSH key if you don't already have one: ssh-keygen -t ed25519 -C \"email@example.com\""
     echo
-    echo "2. Then copy your key to this server with:"
-    echo
-    echo "   ssh-copy-id $username@SERVER_IP"
+    echo "2. Then copy your key to this server with: ssh-copy-id $username@$(hostname -I | awk '{print $1}')"
     echo
     
-    if get_yes_no "Press <y> to prepare the server for SSH key authentication or <n> to cancel"; then
-      # Set up .ssh directory with correct permissions
-      user_home=$(eval echo ~${username})
-      mkdir -p ${user_home}/.ssh
-      touch ${user_home}/.ssh/authorized_keys
-      
-      # Fix permissions
-      chmod 700 ${user_home}/.ssh
-      chmod 600 ${user_home}/.ssh/authorized_keys
-      chown -R ${username}:${username} ${user_home}/.ssh
-      
-      msg_ok "SSH directory created with correct permissions for $username"
-      msg_ok "SSH configuration complete - ready for keys!"
-      
-      echo "You can now copy your key from your local machine using:"
-      echo "ssh-copy-id $username@SERVER_IP"
-      echo
-      echo "These server-side preparations will allow you to use SSH keys for login."
-      echo
+    # Set up .ssh directory with correct permissions
+    user_home=$(eval echo ~${username})
+    mkdir -p ${user_home}/.ssh
+    touch ${user_home}/.ssh/authorized_keys
+    
+    # Fix permissions
+    chmod 700 ${user_home}/.ssh
+    chmod 600 ${user_home}/.ssh/authorized_keys
+    chown -R ${username}:${username} ${user_home}/.ssh
+    
+    msg_ok "SSH directory created with correct permissions for $username"
+    
+    echo "Please complete the following steps:"
+    echo "1. Keep this terminal window open"
+    echo "2. Open a new terminal window on your local machine"
+    echo "3. Generate and copy your SSH key as shown above"
+    echo "4. Return to this window when complete"
+    echo
+    
+    if get_yes_no "Have you copied your SSH key to the server?"; then
+      # Check if key was actually copied
+      if [ -s "${user_home}/.ssh/authorized_keys" ]; then
+        msg_ok "SSH key detected for $username"
+        return 0
+      else
+        msg_error "No SSH key detected for $username"
+        return 1
+      fi
     else
-      msg_info "SSH key setup cancelled"
+      msg_info "You can complete this step later, but some security features will be unavailable until then"
+      return 1
     fi
   else
     msg_info "Invalid selection. SSH key setup cancelled."
+    return 1
   fi
 }
 
 # Function to set up passwordless sudo for SSH users
 setup_passwordless_sudo() {
   # Get list of sudo-capable users
-  sudo_users=$(grep -Po '^sudo.+:\K.*$' /etc/group | tr ',' ' ')
+  sudo_users=$(grep -Po '^sudo.+:\K.*$' /etc/group 2>/dev/null | tr ',' ' ')
   
   if [ -z "$sudo_users" ]; then
     msg_info "No sudo users found for passwordless configuration"
@@ -369,6 +507,7 @@ setup_passwordless_sudo() {
         echo "${username} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/99-${username}-nopasswd
         chmod 440 /etc/sudoers.d/99-${username}-nopasswd
         msg_ok "Passwordless sudo enabled for ${username}"
+        echo "Passwordless sudo: Enabled for $username" >> "$SUMMARY_FILE"
       else
         msg_info "Passwordless sudo configuration cancelled"
       fi
@@ -377,6 +516,7 @@ setup_passwordless_sudo() {
     fi
   else
     msg_info "Passwordless sudo configuration skipped"
+    echo "Passwordless sudo: Not configured" >> "$SUMMARY_FILE"
   fi
 }
 
@@ -384,17 +524,17 @@ setup_passwordless_sudo() {
 # 2. FIREWALL SETUP
 #######################
 
-# Function to configure UFW with awareness of installed services
+# Function to optionally configure UFW
 configure_firewall() {
-  if ! command -v ufw >/dev/null; then
-    msg_info "Installing UFW (Uncomplicated Firewall)..."
-    apt install -y ufw
-  fi
-  
-  # Check if UFW is already enabled
-  ufw_status=$(ufw status | head -1)
-  
-  if get_yes_no "Would you like to configure the firewall (UFW)? Current status: $ufw_status"; then
+  if get_yes_no "Would you like to install and configure UFW (Uncomplicated Firewall)? Note: If you're using a cloud VPS, it might already have a firewall configured at the provider level."; then
+    if ! command -v ufw >/dev/null; then
+      msg_info "Installing UFW (Uncomplicated Firewall)..."
+      apt install -y ufw
+    fi
+    
+    # Check if UFW is already enabled
+    ufw_status=$(ufw status | head -1)
+    
     # Confirm the basics
     if get_yes_no "Do you want to apply the recommended basic rules? (Allow SSH, deny incoming, allow outgoing)"; then
       # Configure basic rules
@@ -426,7 +566,28 @@ configure_firewall() {
     fi
     
     # Auto-detect installed services and add rules
-    detect_and_add_service_rules
+    if [ ${#DETECTED_SERVICES[@]} -gt 0 ]; then
+      echo "Detected services with following ports:"
+      echo -e "$DETECTED_SERVICES_LIST"
+      
+      if get_yes_no "Would you like to add firewall rules for these detected services?"; then
+        for service in "${!DETECTED_SERVICES[@]}"; do
+          ports="${DETECTED_SERVICES[$service]}"
+          
+          # Skip services with N/A as port or already processed HTTP/HTTPS
+          if [ "$ports" = "N/A" ] || [ "$service" = "nginx" ] || [ "$service" = "apache2" ]; then
+            continue
+          fi
+          
+          # Add multiple port entries if comma-separated
+          IFS=',' read -ra PORT_ARRAY <<< "$ports"
+          for port in "${PORT_ARRAY[@]}"; do
+            ufw allow "$port"/tcp comment "$service"
+            msg_ok "Added rule for $service (Port $port)"
+          done
+        done
+      fi
+    fi
     
     # Ask about custom port
     if get_yes_no "Do you want to allow any custom ports?"; then
@@ -486,13 +647,18 @@ configure_firewall() {
       if get_yes_no "Do you want to enable the firewall now with the configured rules?"; then
         echo "y" | ufw enable
         msg_ok "Firewall enabled successfully"
+        echo "Firewall (UFW): Enabled" >> "$SUMMARY_FILE"
       else
         msg_info "Firewall configured but not enabled"
+        echo "Firewall (UFW): Configured but not enabled" >> "$SUMMARY_FILE"
       fi
     else
       if get_yes_no "Firewall is already active. Do you want to reload the configuration?"; then
         ufw reload
         msg_ok "Firewall configuration reloaded"
+        echo "Firewall (UFW): Active and reloaded" >> "$SUMMARY_FILE"
+      else
+        echo "Firewall (UFW): Active but not reloaded" >> "$SUMMARY_FILE"
       fi
     fi
     
@@ -502,87 +668,13 @@ configure_firewall() {
     ufw status verbose
     echo
   else
-    msg_info "Firewall configuration skipped"
-  fi
-}
-
-# Function to detect installed services and add firewall rules
-detect_and_add_service_rules() {
-  # List of rules to add (service name, port, protocol, description)
-  declare -a detected_services
-  
-  # Read from the state file created by the setup script
-  if [ -f "$STATE_FILE" ]; then
-    while IFS=: read -r service port; do
-      case "$service" in
-        "webmin")
-          detected_services+=("Webmin" "$port" "tcp" "Webmin admin panel")
-          ;;
-        "easypanel")
-          detected_services+=("Easy Panel" "$port" "tcp" "Easy Panel")
-          ;;
-        "dockge")
-          detected_services+=("Dockge" "$port" "tcp" "Dockge container manager")
-          ;;
-        "docker")
-          # Only add Docker API if explicitly configured to be exposed
-          if grep -q "^tcp://" /etc/docker/daemon.json 2>/dev/null; then
-            detected_services+=("Docker API" "$port" "tcp" "Docker API (caution: should be restricted)")
-          fi
-          ;;
-      esac
-    done < "$STATE_FILE"
-  fi
-  
-  # Additional detection for services that might not be in the state file
-  
-  # Check for Webmin
-  if systemctl is-active --quiet webmin || [ -f /etc/webmin/miniserv.conf ]; then
-    webmin_port=$(grep "^port=" /etc/webmin/miniserv.conf 2>/dev/null | cut -d= -f2)
-    webmin_port=${webmin_port:-10000}  # Default to 10000 if not found
-    # Check if already in the array
-    if ! [[ " ${detected_services[@]} " =~ " Webmin " ]]; then
-      detected_services+=("Webmin" "$webmin_port" "tcp" "Webmin admin panel")
-    fi
-  fi
-  
-  # Check for Easy Panel
-  if [ -d /opt/easypanel ] || docker ps 2>/dev/null | grep -q "easypanel"; then
-    # Check if already in the array
-    if ! [[ " ${detected_services[@]} " =~ " Easy Panel " ]]; then
-      detected_services+=("Easy Panel" "3000" "tcp" "Easy Panel")
-    fi
-  fi
-  
-  # Check for Dockge
-  if docker ps 2>/dev/null | grep -q "dockge"; then
-    # Check if already in the array
-    if ! [[ " ${detected_services[@]} " =~ " Dockge " ]]; then
-      detected_services+=("Dockge" "5001" "tcp" "Dockge container manager")
-    fi
-  fi
-  
-  # If we found services, ask user to confirm adding rules
-  if [ ${#detected_services[@]} -gt 0 ]; then
-    echo "Detected installed services:"
-    echo
-    for ((i=0; i<${#detected_services[@]}; i+=4)); do
-      echo -e "• ${detected_services[i]}: Port ${HIGHLIGHT}${detected_services[i+1]}/${detected_services[i+2]}${CL}"
-    done
-    echo
+    msg_info "UFW configuration skipped"
+    echo "Firewall (UFW): Not configured" >> "$SUMMARY_FILE"
     
-    if get_yes_no "Would you like to add firewall rules for these services?"; then
-      for ((i=0; i<${#detected_services[@]}; i+=4)); do
-        service=${detected_services[i]}
-        port=${detected_services[i+1]}
-        protocol=${detected_services[i+2]}
-        description=${detected_services[i+3]}
-        
-        ufw allow "$port"/"$protocol" comment "$description"
-        msg_ok "Added rule for $service (Port $port/$protocol)"
-      done
-    else
-      msg_info "Skipped adding rules for detected services"
+    # Add detected services to summary for cloud firewall reference
+    if [ -n "$DETECTED_SERVICES_LIST" ]; then
+      echo "Note: The following services were detected. Please ensure your cloud firewall allows these ports:" >> "$SUMMARY_FILE"
+      echo -e "$DETECTED_SERVICES_LIST" >> "$SUMMARY_FILE"
     fi
   fi
 }
@@ -591,69 +683,59 @@ detect_and_add_service_rules() {
 # 3. FAIL2BAN SETUP
 #######################
 
-# Setup Fail2Ban function
+# Setup Fail2Ban function with simplified configuration
 setup_fail2ban() {
   if get_yes_no "Would you like to install and configure Fail2Ban? It helps protect your server against brute-force attacks."; then
     msg_info "Installing Fail2Ban..."
     apt install -y fail2ban
     
-    # Create a local configuration
-    cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
-    
-    # Configure Fail2Ban settings
-    echo -n "Enter ban time in seconds (default: 600): "
-    read -r ban_time
-    ban_time=${ban_time:-600}
-    echo
-    
-    echo -n "Enter find time in seconds (default: 600): "
-    read -r find_time
-    find_time=${find_time:-600}
-    echo
-    
-    echo -n "Enter max retry attempts (default: 5): "
-    read -r max_retry
-    max_retry=${max_retry:-5}
-    echo
-    
-    # Get additional IP whitelist
-    echo -n "Enter additional IPs to whitelist (space-separated, leave empty for none): "
-    read -r additional_ips
-    echo
-    
-    # Always include localhost
-    whitelist_ips="127.0.0.1 ::1"
-    if [[ -n "$additional_ips" ]]; then
-      whitelist_ips="$whitelist_ips $additional_ips"
-    fi
-    
-    # Create custom config
+    # Create a local configuration with default settings
     cat > /etc/fail2ban/jail.local << EOF
 [DEFAULT]
-# Ban hosts for $ban_time seconds
-bantime = $ban_time
-# Find time window
-findtime = $find_time
-# Allow $max_retry retries
-maxretry = $max_retry
-# Ignore these IPs
-ignoreip = $whitelist_ips
+# Ban hosts for 10 minutes (600 seconds)
+bantime = 600
+# Find time window of 10 minutes
+findtime = 600
+# Allow 5 retries
+maxretry = 5
+# Ignore localhost
+ignoreip = 127.0.0.1 ::1
+EOF
+    
+    # Ask for IP whitelist
+    echo -n "Enter IPs or ranges to whitelist (space-separated, leave empty for none): "
+    read -r whitelist_ips
+    echo
+    
+    if [[ -n "$whitelist_ips" ]]; then
+      # Append to ignoreip
+      sed -i "s/ignoreip = 127.0.0.1 ::1/ignoreip = 127.0.0.1 ::1 $whitelist_ips/" /etc/fail2ban/jail.local
+      msg_ok "Added whitelisted IPs: $whitelist_ips"
+      echo "Fail2Ban whitelist: $whitelist_ips" >> "$SUMMARY_FILE"
+    fi
+    
+    # Add SSH jail
+    cat >> /etc/fail2ban/jail.local << EOF
 
 [sshd]
 enabled = true
 port = ssh
 filter = sshd
 logpath = /var/log/auth.log
-maxretry = $max_retry
+maxretry = 5
 EOF
     
     # Enable and start Fail2Ban
     systemctl enable fail2ban
     systemctl restart fail2ban
     
-    msg_ok "Fail2Ban installed and configured"
+    msg_ok "Fail2Ban installed and configured with default settings"
+    echo "Fail2Ban: Installed and active" >> "$SUMMARY_FILE"
+    echo "Fail2Ban settings: bantime=600s, findtime=600s, maxretry=5" >> "$SUMMARY_FILE"
+    echo "Fail2Ban command to modify settings: sudo nano /etc/fail2ban/jail.local" >> "$SUMMARY_FILE"
+    echo "Fail2Ban command to reload: sudo systemctl reload fail2ban" >> "$SUMMARY_FILE"
     
-    # Save the command for adding VPN subnet to whitelist for later
+    # Save command for adding VPN subnet to whitelist for later
     mkdir -p "$TEMP_DIR"
     echo "To add a VPN subnet to the Fail2Ban whitelist later, use:" > "$TEMP_DIR/fail2ban_vpn.txt"
     echo "sudo fail2ban-client set sshd addignoreip VPN_SUBNET" >> "$TEMP_DIR/fail2ban_vpn.txt"
@@ -666,6 +748,7 @@ EOF
     echo
   else
     msg_info "Fail2Ban installation skipped"
+    echo "Fail2Ban: Not installed" >> "$SUMMARY_FILE"
   fi
 }
 
@@ -694,9 +777,11 @@ setup_vpn() {
       ;;
     3)
       msg_info "VPN setup skipped"
+      echo "VPN: Not configured" >> "$SUMMARY_FILE"
       ;;
     *)
       msg_info "VPN setup skipped"
+      echo "VPN: Not configured" >> "$SUMMARY_FILE"
       ;;
   esac
 }
@@ -731,7 +816,7 @@ setup_tailscale() {
     fi
     
     # Get Tailscale IP and subnet
-    tailscale_ip=$(tailscale ip)
+    tailscale_ip=$(tailscale ip 2>/dev/null || echo "Unknown")
     tailscale_subnet="100.64.0.0/10"  # Default Tailscale subnet
     
     # Save command for allowing VPN subnet in firewall for later
@@ -739,32 +824,22 @@ setup_tailscale() {
     echo "# To allow traffic from the Tailscale VPN subnet in UFW:" > "$TEMP_DIR/vpn_firewall.txt"
     echo "sudo ufw allow from $tailscale_subnet comment 'Tailscale VPN subnet'" >> "$TEMP_DIR/vpn_firewall.txt"
     
-    # Create info file for summary
-    mkdir -p "$TEMP_DIR/info"
-    cat > "$TEMP_DIR/info/tailscale.txt" << EOF
-Tailscale VPN has been configured successfully.
-
-Your Tailscale IP: $tailscale_ip
-Tailscale subnet: $tailscale_subnet
-
-You can now connect to this server securely via the Tailscale network.
-
-To allow all traffic from the Tailscale subnet in your firewall:
-sudo ufw allow from $tailscale_subnet comment 'Tailscale VPN subnet'
-
-To add the Tailscale subnet to Fail2Ban whitelist:
-sudo fail2ban-client set sshd addignoreip $tailscale_subnet
-EOF
-
+    # Save command for Fail2Ban whitelist
+    echo "# To add the Tailscale subnet to Fail2Ban whitelist:" >> "$TEMP_DIR/fail2ban_vpn.txt"
+    echo "sudo fail2ban-client set sshd addignoreip $tailscale_subnet" >> "$TEMP_DIR/fail2ban_vpn.txt"
+    
     echo "Tailscale has been successfully configured."
     echo
     echo -e "Your Tailscale IP: ${HIGHLIGHT}$tailscale_ip${CL}"
     echo -e "Tailscale subnet: ${HIGHLIGHT}$tailscale_subnet${CL}"
     echo
-    echo "You can now connect to this server securely via the Tailscale network."
-    echo
+    
+    echo "VPN: Tailscale" >> "$SUMMARY_FILE"
+    echo "Tailscale IP: $tailscale_ip" >> "$SUMMARY_FILE"
+    echo "Tailscale subnet: $tailscale_subnet" >> "$SUMMARY_FILE"
   else
     msg_error "Tailscale installation failed"
+    echo "VPN: Tailscale installation failed" >> "$SUMMARY_FILE"
   fi
 }
 
@@ -799,44 +874,26 @@ setup_netbird() {
       echo "# To allow traffic from the Netbird VPN subnet in UFW:" > "$TEMP_DIR/vpn_firewall.txt"
       echo "sudo ufw allow from $netbird_subnet comment 'Netbird VPN subnet'" >> "$TEMP_DIR/vpn_firewall.txt"
       
-      # Create info file for summary
-      mkdir -p "$TEMP_DIR/info"
-      cat > "$TEMP_DIR/info/netbird.txt" << EOF
-Netbird VPN has been configured successfully.
-
-Your Netbird IP: $netbird_ip
-Netbird subnet: $netbird_subnet
-
-You can now connect to this server securely via the Netbird network.
-
-To allow all traffic from the Netbird subnet in your firewall:
-sudo ufw allow from $netbird
-Netbird VPN has been configured successfully.
-
-Your Netbird IP: $netbird_ip
-Netbird subnet: $netbird_subnet
-
-You can now connect to this server securely via the Netbird network.
-
-To allow all traffic from the Netbird subnet in your firewall:
-sudo ufw allow from $netbird_subnet comment 'Netbird VPN subnet'
-
-To add the Netbird subnet to Fail2Ban whitelist:
-sudo fail2ban-client set sshd addignoreip $netbird_subnet
-EOF
-
+      # Save command for Fail2Ban whitelist
+      echo "# To add the Netbird subnet to Fail2Ban whitelist:" >> "$TEMP_DIR/fail2ban_vpn.txt"
+      echo "sudo fail2ban-client set sshd addignoreip $netbird_subnet" >> "$TEMP_DIR/fail2ban_vpn.txt"
+      
       echo "Netbird has been successfully configured."
       echo
       echo -e "Your Netbird IP: ${HIGHLIGHT}$netbird_ip${CL}"
       echo -e "Netbird subnet: ${HIGHLIGHT}$netbird_subnet${CL}"
       echo
-      echo "You can now connect to this server securely via the Netbird network."
-      echo
+      
+      echo "VPN: Netbird" >> "$SUMMARY_FILE"
+      echo "Netbird IP: $netbird_ip" >> "$SUMMARY_FILE"
+      echo "Netbird subnet: $netbird_subnet" >> "$SUMMARY_FILE"
     else
       msg_error "Netbird setup key not provided"
+      echo "VPN: Netbird configuration failed (no setup key)" >> "$SUMMARY_FILE"
     fi
   else
     msg_error "Netbird installation failed"
+    echo "VPN: Netbird installation failed" >> "$SUMMARY_FILE"
   fi
 }
 
@@ -859,52 +916,21 @@ APT::Periodic::Unattended-Upgrade "1";
 APT::Periodic::AutocleanInterval "7";
 EOF
     
-    # Ask about automatic reboot if needed
-    auto_reboot="false"
-    reboot_time="02:00"
-    
-    if get_yes_no "Would you like to enable automatic reboot when necessary?"; then
-      auto_reboot="true"
-      
-      # Simple approach for reboot time
-      echo "Enter preferred reboot time (24-hour format):"
-      read -r reboot_time
-      
-      if [ -z "$reboot_time" ]; then
-        reboot_time="02:00"
-      fi
-      
-      msg_ok "Automatic reboot configured for $reboot_time"
-    else
-      msg_info "Automatic reboot not enabled"
+    # Disable automatic reboot in configuration
+    sed -i "s|^Unattended-Upgrade::Automatic-Reboot \".*\";|Unattended-Upgrade::Automatic-Reboot \"false\";|" /etc/apt/apt.conf.d/50unattended-upgrades 2>/dev/null
+    if ! grep -q "Unattended-Upgrade::Automatic-Reboot" /etc/apt/apt.conf.d/50unattended-upgrades; then
+      echo 'Unattended-Upgrade::Automatic-Reboot "false";' >> /etc/apt/apt.conf.d/50unattended-upgrades
     fi
-    
-    # Configure automatic-reboot
-    sed -i "s|//Unattended-Upgrade::Automatic-Reboot \"false\";|Unattended-Upgrade::Automatic-Reboot \"$auto_reboot\";|" /etc/apt/apt.conf.d/50unattended-upgrades
-    
-    # Configure reboot time
-    sed -i "s|//Unattended-Upgrade::Automatic-Reboot-Time \"02:00\";|Unattended-Upgrade::Automatic-Reboot-Time \"$reboot_time\";|" /etc/apt/apt.conf.d/50unattended-upgrades
     
     # Restart unattended-upgrades service
     systemctl restart unattended-upgrades
     
-    # Create info file for summary
-    mkdir -p "$TEMP_DIR/info"
-    echo "Automatic security updates have been configured." > "$TEMP_DIR/info/auto-updates.txt"
-    echo "" >> "$TEMP_DIR/info/auto-updates.txt"
-    echo "Package lists update: Daily" >> "$TEMP_DIR/info/auto-updates.txt"
-    echo "Security updates: Enabled" >> "$TEMP_DIR/info/auto-updates.txt"
-    echo "Cleanup interval: Weekly" >> "$TEMP_DIR/info/auto-updates.txt"
-    
-    if [ "$auto_reboot" = "true" ]; then
-      echo "Automatic reboot: Enabled at $reboot_time" >> "$TEMP_DIR/info/auto-updates.txt"
-    else
-      echo "Automatic reboot: Disabled" >> "$TEMP_DIR/info/auto-updates.txt"
-    fi
-    
-    msg_ok "Automatic security updates configured successfully"
+    msg_ok "Automatic security updates configured successfully (no automatic reboot)"
+    echo "Automatic security updates: Enabled" >> "$SUMMARY_FILE"
+    echo "Automatic reboot: Disabled" >> "$SUMMARY_FILE"
   else
     msg_info "Automatic security updates not configured"
+    echo "Automatic security updates: Not configured" >> "$SUMMARY_FILE"
   fi
 }
 
@@ -923,122 +949,67 @@ display_security_summary() {
   echo "System Information:"
   echo "• Hostname: $(hostname)"
   echo "• IP Address: $server_ip"
-  echo "• OS: $(lsb_release -ds)"
+  echo "• OS: $(lsb_release -ds 2>/dev/null || cat /etc/debian_version 2>/dev/null || echo "Debian-based")"
   echo
   
-  # Check what was configured
+  # Read from summary file
   echo "Security Configuration:"
-  
-  # SSH status
-  if [ -f /etc/ssh/sshd_config.d/50-security.conf ]; then
-    echo "• SSH: Hardened configuration applied"
-    if grep -q "PasswordAuthentication no" /etc/ssh/sshd_config.d/50-security.conf; then
-      echo "  - Password authentication: Disabled"
-    else
-      echo "  - Password authentication: Enabled"
-    fi
-    if grep -q "PermitRootLogin no" /etc/ssh/sshd_config.d/50-security.conf; then
-      echo "  - Root login: Disabled"
-    fi
-    if grep -q "AllowUsers" /etc/ssh/sshd_config.d/50-security.conf; then
-      allowed_users=$(grep "AllowUsers" /etc/ssh/sshd_config.d/50-security.conf | cut -d' ' -f2-)
-      echo "  - Allowed users: $allowed_users"
-    fi
-  else
-    echo "• SSH: Standard configuration"
-  fi
-  
-  # Passwordless sudo
-  if ls /etc/sudoers.d/99-*-nopasswd 2>/dev/null >/dev/null; then
-    passwordless_users=$(ls /etc/sudoers.d/99-*-nopasswd | sed 's/.*99-\(.*\)-nopasswd/\1/')
-    echo "• Passwordless sudo: Enabled for users: $passwordless_users"
-  else
-    echo "• Passwordless sudo: Not configured"
-  fi
-  
-  # Firewall status
-  ufw_status=$(ufw status | head -1)
-  if [[ "$ufw_status" == *"active"* ]]; then
-    echo "• Firewall (UFW): Enabled"
-    echo "  - Rules:"
-    ufw status | grep -v "Status:" | sed 's/^/    /'
-    echo
-  else
-    echo "• Firewall (UFW): Disabled"
-  fi
-  
-  # Fail2Ban status
-  if systemctl is-active --quiet fail2ban; then
-    echo "• Fail2Ban: Active"
-    if [ -f /etc/fail2ban/jail.local ]; then
-      ban_time=$(grep "^bantime" /etc/fail2ban/jail.local | head -1 | awk '{print $3}')
-      find_time=$(grep "^findtime" /etc/fail2ban/jail.local | head -1 | awk '{print $3}')
-      max_retry=$(grep "^maxretry" /etc/fail2ban/jail.local | head -1 | awk '{print $3}')
-      echo "  - Settings: Ban time = ${ban_time}s, Find time = ${find_time}s, Max retries = $max_retry"
-    fi
-  else
-    echo "• Fail2Ban: Not configured"
-  fi
-  
-  # VPN status
-  if systemctl is-active --quiet tailscale; then
-    echo "• VPN: Tailscale active (IP: $(tailscale ip))"
-  elif systemctl is-active --quiet netbird; then
-    echo "• VPN: Netbird active"
-  else
-    echo "• VPN: Not configured"
-  fi
-  
-  # Automatic updates
-  if [ -f /etc/apt/apt.conf.d/20auto-upgrades ]; then
-    echo "• Automatic updates: Configured"
-    if grep -q "Automatic-Reboot \"true\"" /etc/apt/apt.conf.d/50unattended-upgrades; then
-      reboot_time=$(grep "Automatic-Reboot-Time" /etc/apt/apt.conf.d/50unattended-upgrades | grep -v "^//" | sed 's/.*"\(.*\)".*/\1/')
-      echo "  - Automatic reboot: Enabled ($reboot_time)"
-    else
-      echo "  - Automatic reboot: Disabled"
-    fi
-  else
-    echo "• Automatic updates: Not configured"
-  fi
+  while IFS= read -r line; do
+    echo "• $line"
+  done < "$SUMMARY_FILE"
   
   echo
   
-  # Add detailed information if available
-  if [ -d "$TEMP_DIR/info" ]; then
-    echo "=== Additional Configuration Commands ==="
+  # Add VPN firewall commands if available
+  if [ -f "$TEMP_DIR/vpn_firewall.txt" ]; then
+    echo "=== VPN Firewall Commands ==="
+    cat "$TEMP_DIR/vpn_firewall.txt"
+    echo
+  fi
+  
+  # Add Fail2Ban VPN whitelist commands if available
+  if [ -f "$TEMP_DIR/fail2ban_vpn.txt" ]; then
+    echo "=== Fail2Ban VPN Whitelist Commands ==="
+    cat "$TEMP_DIR/fail2ban_vpn.txt"
+    echo
+  fi
+  
+  # Save complete summary to file
+  summary_file="/root/debian-express-security-summary.txt"
+  
+  {
+    echo "=== Debian Express Security Summary ==="
+    echo
+    echo "System Information:"
+    echo "• Hostname: $(hostname)"
+    echo "• IP Address: $server_ip"
+    echo "• OS: $(lsb_release -ds 2>/dev/null || cat /etc/debian_version 2>/dev/null || echo "Debian-based")"
+    echo
+    echo "Security Configuration:"
+    while IFS= read -r line; do
+      echo "• $line"
+    done < "$SUMMARY_FILE"
     echo
     
-    # Add VPN firewall commands
+    # Add VPN firewall commands if available
     if [ -f "$TEMP_DIR/vpn_firewall.txt" ]; then
-      echo "VPN Firewall Rules:"
+      echo "=== VPN Firewall Commands ==="
       cat "$TEMP_DIR/vpn_firewall.txt"
       echo
     fi
     
-    # Add Fail2Ban VPN whitelist commands
+    # Add Fail2Ban VPN whitelist commands if available
     if [ -f "$TEMP_DIR/fail2ban_vpn.txt" ]; then
-      echo "Fail2Ban VPN Whitelist:"
+      echo "=== Fail2Ban VPN Whitelist Commands ==="
       cat "$TEMP_DIR/fail2ban_vpn.txt"
       echo
     fi
-    
-    # Add VPN info
-    if [ -f "$TEMP_DIR/info/tailscale.txt" ]; then
-      echo "Tailscale VPN Configuration:"
-      grep "To allow all\|To add the" "$TEMP_DIR/info/tailscale.txt"
-      echo
-    elif [ -f "$TEMP_DIR/info/netbird.txt" ]; then
-      echo "Netbird VPN Configuration:"
-      grep "To allow all\|To add the" "$TEMP_DIR/info/netbird.txt"
-      echo
-    fi
-  fi
+  } > "$summary_file"
   
-  # Save summary to file
-  echo "=== Debian Express Security Summary ===" > "$TEMP_DIR/security_summary.txt"
-  echo >> "$TEMP_DIR/security_summary.txt"
-  echo "Full security summary available at: /root/debian-express-security-summary.txt" >> "$TEMP_DIR/security_summary.txt"
+  chmod 600 "$summary_file"
+  
+  echo "Complete security summary saved to: $summary_file"
+  echo
 }
 
 # Function to clean up and complete setup
@@ -1052,11 +1023,6 @@ finalize_security_setup() {
   # Generate and display the summary
   display_security_summary
   
-  # Save complete summary to file
-  summary_file="/root/debian-express-security-summary.txt"
-  cp "$TEMP_DIR/security_summary.txt" "$summary_file"
-  chmod 600 "$summary_file"
-  
   msg_ok "Debian Express Security setup completed successfully!"
   echo
   echo "Your server has been secured according to your preferences."
@@ -1064,9 +1030,7 @@ finalize_security_setup() {
   echo
   echo "For security changes to fully apply, it's recommended to reboot your server."
   echo
-  echo -n "Would you like to reboot now? (y/N): "
-  read -r reboot_choice
-  if [[ "$reboot_choice" =~ ^[Yy]$ ]]; then
+  if get_yes_no "Would you like to reboot now?"; then
     echo "Rebooting system in 5 seconds..."
     sleep 5
     reboot
@@ -1088,6 +1052,9 @@ main() {
     echo "Setup cancelled. No changes were made."
     exit 0
   fi
+  
+  # Detect installed services
+  detect_services
   
   # SSH hardening
   configure_ssh_security
