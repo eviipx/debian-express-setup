@@ -643,34 +643,34 @@ display_summary() {
   echo "=== Debian Express Setup Summary ==="
   echo
   echo "System Information:"
-  echo "• Hostname: $(hostname)"
-  echo "• IP Address: $server_ip"
-  echo "• OS: $(lsb_release -ds)"
+  echo -e "• Hostname: ${HIGHLIGHT}$(hostname)${CL}"
+  echo -e "• IP Address: ${HIGHLIGHT}$server_ip${CL}"
+  echo -e "• OS: ${HIGHLIGHT}$(lsb_release -ds)${CL}"
   echo
   
   # Swap status
   swap_size=$(free -h | grep Swap | awk '{print $2}')
-  echo "• Swap: $swap_size"
+  echo -e "• Swap: ${HIGHLIGHT}$swap_size${CL}"
   
   # System optimization status
   if [ -f /etc/sysctl.d/99-performance.conf ]; then
-    echo "• System optimizations: Applied"
+    echo -e "• System optimizations: ${HIGHLIGHT}Applied${CL}"
   else
-    echo "• System optimizations: Not applied"
+    echo -e "• System optimizations: ${HIGHLIGHT}Not applied${CL}"
   fi
   
   # I/O scheduler status
   if [ -f /etc/udev/rules.d/60-scheduler.rules ]; then
-    echo "• I/O scheduler: Optimized"
+    echo -e "• I/O scheduler: ${HIGHLIGHT}Optimized${CL}"
   else
-    echo "• I/O scheduler: Default"
+    echo -e "• I/O scheduler: ${HIGHLIGHT}Default${CL}"
   fi
   
   # Nohang status
   if systemctl is-active --quiet nohang-desktop.service; then
-    echo "• Nohang: Installed and active"
+    echo -e "• Nohang: ${HIGHLIGHT}Installed and active${CL}"
   else
-    echo "• Nohang: Not installed"
+    echo -e "• Nohang: ${HIGHLIGHT}Not installed${CL}"
   fi
   
   echo
@@ -680,18 +680,18 @@ display_summary() {
   if command -v docker >/dev/null; then
     # Store Docker version in a variable first to avoid nested command substitution
     docker_version=$(docker --version | cut -d' ' -f3 | tr -d ',')
-    echo "• Docker: Installed ($docker_version)"
+    echo -e "• Docker: ${HIGHLIGHT}Installed ($docker_version)${CL}"
     
     # Check if Dockge is installed - use Docker ps to verify
     if docker ps 2>/dev/null | grep -q "dockge"; then
-      echo "• Dockge container manager: Installed and running"
-      echo "  - URL: http://$server_ip:5001"
-      echo "  - First-time setup required on first access"
+      echo -e "• Dockge container manager: ${HIGHLIGHT}Installed and running${CL}"
+      echo -e "  - URL: ${HIGHLIGHT}http://$server_ip:5001${CL}"
+      echo -e "  - First-time setup required on first access"
     else
-      echo "• Dockge container manager: Not installed"
+      echo -e "• Dockge container manager: ${HIGHLIGHT}Not installed${CL}"
     fi
   else
-    echo "• Docker: Not installed"
+    echo -e "• Docker: ${HIGHLIGHT}Not installed${CL}"
   fi
   
   # Monitoring tools
@@ -707,9 +707,9 @@ display_summary() {
   fi
   
   if [ -n "$tools" ]; then
-    echo "• Monitor and benchmark tools: $tools"
+    echo -e "• Monitor and benchmark tools: ${HIGHLIGHT}$tools${CL}"
   else
-    echo "• Monitor and benchmark tools: None installed"
+    echo -e "• Monitor and benchmark tools: ${HIGHLIGHT}None installed${CL}"
   fi
   
   echo
