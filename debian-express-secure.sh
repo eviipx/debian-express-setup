@@ -797,7 +797,7 @@ setup_netbird() {
       mkdir -p "$TEMP_DIR"
       echo "# To allow traffic from the Netbird VPN subnet in UFW:" > "$TEMP_DIR/vpn_firewall.txt"
       echo "sudo ufw allow from $netbird_subnet comment 'Netbird VPN subnet'" >> "$TEMP_DIR/
-##############################
+      ##############################
 # 5. AUTOMATIC SECURITY UPDATES
 ##############################
 
