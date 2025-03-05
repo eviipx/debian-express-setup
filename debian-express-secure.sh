@@ -67,6 +67,45 @@ check_root() {
   fi
 }
 
+# Main function to orchestrate the security setup process
+main() {
+  check_root
+  check_debian_based
+  display_banner
+  detect_os
+  check_setup_script
+  
+  # Confirmation to proceed
+  if ! get_yes_no "This script will help you secure your Debian-based server. Do you want to proceed?"; then
+    echo "Setup cancelled. No changes were made."
+    exit 0
+  fi
+  
+  # Detect installed services
+  detect_services
+  
+  # SSH hardening
+  configure_ssh_security
+  
+  # Firewall configuration
+  configure_firewall
+  
+  # Install and configure Fail2Ban
+  setup_fail2ban
+  
+  # VPN setup
+  setup_vpn
+  
+  # Automatic security updates
+  setup_auto_updates
+  
+  # Finalize setup
+  finalize_security_setup
+}
+
+# Run the main function
+main "$@"
+
 # Function to check if it's a Debian-based system
 check_debian_based() {
   if [ ! -f /etc/debian_version ]; then
@@ -149,607 +188,7 @@ detect_services() {
         fi
         
         seen_services["$service_key"]=1
-        echo "Firewall (UFW): Active but not reloaded" >> "$SUMMARY_FILE"
-      fi
-    fi
-    
-    # Show UFW rules summary
-    echo "Current firewall configuration:"
-    echo
-    ufw status verbose
-    echo
-  else
-    msg_info "UFW configuration skipped"
-    echo "Firewall (UFW): Not configured" >> "$SUMMARY_FILE"
-    
-    # Add detected services to summary for cloud firewall reference
-    if [ -n "$DETECTED_SERVICES_LIST" ]; then
-      echo "Note: The following services were detected. Please ensure your cloud firewall allows these ports:" >> "$SUMMARY_FILE"
-      echo -e "$DETECTED_SERVICES_LIST" >> "$SUMMARY_FILE"
-    fi
-  fi
-}
-
-#######################
-# 3. FAIL2BAN SETUP
-#######################
-
-# Setup Fail2Ban function with simplified configuration
-setup_fail2ban() {
-  if get_yes_no "Would you like to install and configure Fail2Ban? It helps protect your server against brute-force attacks."; then
-    msg_info "Installing Fail2Ban..."
-    apt install -y fail2ban
-    
-    # Create a local configuration with default settings
-    cat > /etc/fail2ban/jail.local << EOF
-[DEFAULT]
-# Ban hosts for 10 minutes (600 seconds)
-bantime = 600
-# Find time window of 10 minutes
-findtime = 600
-# Allow 5 retries
-maxretry = 5
-# Ignore localhost
-ignoreip = 127.0.0.1 ::1
-EOF
-    
-    # Ask for IP whitelist with better formatting and examples
-    echo "Enter IPs or ranges to whitelist (space-separated, leave empty for none):"
-    echo "Examples: 192.168.1.5  10.0.0.0/24  192.168.0.0/16"
-    echo
-    echo -n "> "
-    read -r whitelist_ips
-    echo
-    
-    if [[ -n "$whitelist_ips" ]]; then
-      # Append to ignoreip
-      sed -i "s/ignoreip = 127.0.0.1 ::1/ignoreip = 127.0.0.1 ::1 $whitelist_ips/" /etc/fail2ban/jail.local
-      msg_ok "Added whitelisted IPs: $whitelist_ips"
-      echo "Fail2Ban whitelist: $whitelist_ips" >> "$SUMMARY_FILE"
-    fi
-    
-    # Add SSH jail
-    cat >> /etc/fail2ban/jail.local << EOF
-
-[sshd]
-enabled = true
-port = ssh
-filter = sshd
-logpath = /var/log/auth.log
-maxretry = 5
-EOF
-    
-    # Enable and start Fail2Ban
-    systemctl enable fail2ban
-    systemctl restart fail2ban
-    
-    msg_ok "Fail2Ban installed and configured with default settings"
-    echo "Fail2Ban: Installed and active" >> "$SUMMARY_FILE"
-    echo "Fail2Ban settings: bantime=600s, findtime=600s, maxretry=5" >> "$SUMMARY_FILE"
-    echo "Fail2Ban command to modify settings: sudo nano /etc/fail2ban/jail.local" >> "$SUMMARY_FILE"
-    echo "Fail2Ban command to reload: sudo systemctl reload fail2ban" >> "$SUMMARY_FILE"
-    
-    # Save command for adding VPN subnet to whitelist for later
-    mkdir -p "$TEMP_DIR"
-    echo "To add a VPN subnet to the Fail2Ban whitelist later, use:" > "$TEMP_DIR/fail2ban_vpn.txt"
-    echo "sudo fail2ban-client set sshd addignoreip VPN_SUBNET" >> "$TEMP_DIR/fail2ban_vpn.txt"
-    echo "# Example: sudo fail2ban-client set sshd addignoreip 10.8.0.0/24" >> "$TEMP_DIR/fail2ban_vpn.txt"
-    
-    # Wait a moment for the service to fully start
-    echo "Waiting for Fail2Ban service to fully start..."
-    sleep 3
-    
-    # Check service status
-    if systemctl is-active --quiet fail2ban; then
-      echo "Fail2Ban status:"
-      echo
-      fail2ban-client status sshd 2>/dev/null || echo "Fail2Ban is starting up. Run 'sudo fail2ban-client status sshd' later to check status."
-      echo
-    else
-      echo "Fail2Ban status: Service is starting up."
-      echo "Run 'sudo systemctl status fail2ban' later to verify it's running properly."
-      echo
-    fi
-  else
-    msg_info "Fail2Ban installation skipped"
-    echo "Fail2Ban: Not installed" >> "$SUMMARY_FILE"
-  fi
-}
-
-###################
-# 4. VPN SETUP
-###################
-
-# Setup VPN function
-setup_vpn() {
-  echo "VPN Setup:"
-  echo
-  echo -e "${HIGHLIGHT}1${CL}) Tailscale"
-  echo -e "${HIGHLIGHT}2${CL}) Netbird"
-  echo -e "${HIGHLIGHT}3${CL}) Skip VPN setup"
-  echo
-  echo -n "Select an option [1-3]: "
-  read -r vpn_choice
-  echo
-  
-  case $vpn_choice in
-    1)
-      setup_tailscale
-      ;;
-    2)
-      setup_netbird
-      ;;
-    3)
-      msg_info "VPN setup skipped"
-      echo "VPN: Not configured" >> "$SUMMARY_FILE"
-      ;;
-    *)
-      msg_info "VPN setup skipped"
-      echo "VPN: Not configured" >> "$SUMMARY_FILE"
-      ;;
-  esac
-}
-
-# Setup Tailscale function
-setup_tailscale() {
-  msg_info "Installing Tailscale..."
-  
-  # Add Tailscale repository and install
-  curl -fsSL https://tailscale.com/install.sh | sh
-  
-  if [[ $? -eq 0 ]]; then
-    msg_ok "Tailscale installed successfully"
-    
-    auth_key=""
-    if get_yes_no "Do you have a Tailscale auth key? If not, select 'n' and you'll be given a URL to authenticate manually."; then
-      echo -n "Enter your Tailscale auth key: "
-      read -r auth_key
-      echo
-    fi
-    
-    if [[ -n "$auth_key" ]]; then
-      tailscale up --authkey="$auth_key"
-      msg_ok "Tailscale configured with auth key"
-    else
-      # Start Tailscale without auth key
-      tailscale up
-      msg_info "Tailscale started. Please authenticate using the URL above."
-      echo -n "Press Enter once you've authenticated... "
-      read
-      echo
-    fi
-    
-    # Get Tailscale IP and subnet
-    tailscale_ip=$(tailscale ip 2>/dev/null || echo "Unknown")
-    tailscale_subnet="100.64.0.0/10"  # Default Tailscale subnet
-    
-    # Save command for allowing VPN subnet in firewall for later
-    mkdir -p "$TEMP_DIR"
-    echo "# To allow traffic from the Tailscale VPN subnet in UFW:" > "$TEMP_DIR/vpn_firewall.txt"
-    echo "sudo ufw allow from $tailscale_subnet comment 'Tailscale VPN subnet'" >> "$TEMP_DIR/vpn_firewall.txt"
-    
-    # Save command for Fail2Ban whitelist
-    echo "# To add the Tailscale subnet to Fail2Ban whitelist:" >> "$TEMP_DIR/fail2ban_vpn.txt"
-    echo "sudo fail2ban-client set sshd addignoreip $tailscale_subnet" >> "$TEMP_DIR/fail2ban_vpn.txt"
-    
-    echo "Tailscale has been successfully configured."
-    echo
-    echo -e "Your Tailscale IP: ${HIGHLIGHT}$tailscale_ip${CL}"
-    echo -e "Tailscale subnet: ${HIGHLIGHT}$tailscale_subnet${CL}"
-    echo
-    
-    echo "VPN: Tailscale" >> "$SUMMARY_FILE"
-    echo "Tailscale IP: $tailscale_ip" >> "$SUMMARY_FILE"
-    echo "Tailscale subnet: $tailscale_subnet" >> "$SUMMARY_FILE"
-  else
-    msg_error "Tailscale installation failed"
-    echo "VPN: Tailscale installation failed" >> "$SUMMARY_FILE"
-  fi
-}
-
-# Setup Netbird function with improved IP detection
-setup_netbird() {
-  msg_info "Installing Netbird..."
-  
-  # Add Netbird repository and install
-  curl -fsSL https://pkgs.netbird.io/install.sh | sh
-  
-  if [[ $? -eq 0 ]]; then
-    msg_ok "Netbird installed successfully"
-    
-    echo -n "Enter your Netbird setup key: "
-    read -r setup_key
-    echo
-    
-    if [[ -n "$setup_key" ]]; then
-      netbird up --setup-key "$setup_key"
-      msg_ok "Netbird configured with setup key"
-      
-      # Get Netbird IP with improved detection
-      sleep 2 # Give time for interface to come up
-      
-      # Try multiple ways to detect the Netbird interface and IP
-      netbird_ip="Unknown"
-      # First try the standard interface name
-      if ip addr show netbird0 2>/dev/null | grep -q "inet "; then
-        netbird_ip=$(ip addr show netbird0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "Unknown")
-      # If that fails, try with netbird command
-      elif command -v netbird >/dev/null; then
-        netbird_status=$(netbird status 2>/dev/null)
-        if [[ $? -eq 0 ]]; then
-          netbird_ip=$(echo "$netbird_status" | grep -oP 'IP:\s*\K[0-9.]+' || echo "Unknown")
-        fi
-      # If all else fails, try to find any interface that might be netbird
-      else
-        for iface in $(ip -o link | awk -F': ' '{print $2}' | grep -E 'netbird|nb'); do
-          if ip addr show "$iface" 2>/dev/null | grep -q "inet "; then
-            netbird_ip=$(ip addr show "$iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "Unknown")
-            break
-          fi
-        done
-      fi
-      
-      echo -n "Enter your Netbird IP range (e.g., 100.92.0.0/16): "
-      read -r netbird_subnet
-      netbird_subnet=${netbird_subnet:-"100.92.0.0/16"}
-      echo
-      
-      # Save command for allowing VPN subnet in firewall for later
-      mkdir -p "$TEMP_DIR"
-      echo "# To allow traffic from the Netbird VPN subnet in UFW:" > "$TEMP_DIR/vpn_firewall.txt"
-      echo "sudo ufw allow from $netbird_subnet comment 'Netbird VPN subnet'" >> "$TEMP_DIR/vpn_firewall.txt"
-      
-      # Save command for Fail2Ban whitelist
-      echo "# To add the Netbird subnet to Fail2Ban whitelist:" >> "$TEMP_DIR/fail2ban_vpn.txt"
-      echo "sudo fail2ban-client set sshd addignoreip $netbird_subnet" >> "$TEMP_DIR/fail2ban_vpn.txt"
-      
-      echo "Netbird has been successfully configured."
-      echo
-      echo -e "Your Netbird IP: ${HIGHLIGHT}$netbird_ip${CL}"
-      echo -e "Netbird subnet: ${HIGHLIGHT}$netbird_subnet${CL}"
-      echo
-      
-      echo "VPN: Netbird" >> "$SUMMARY_FILE"
-      echo "Netbird IP: $netbird_ip" >> "$SUMMARY_FILE"
-      echo "Netbird subnet: $netbird_subnet" >> "$SUMMARY_FILE"
-    else
-      msg_error "Netbird setup key not provided"
-      echo "VPN: Netbird configuration failed (no setup key)" >> "$SUMMARY_FILE"
-    fi
-  else
-    msg_error "Netbird installation failed"
-    echo "VPN: Netbird installation failed" >> "$SUMMARY_FILE"
-  fi
-}
-
-##############################
-# 5. AUTOMATIC SECURITY UPDATES
-##############################
-
-# Function to set up automatic security updates
-setup_auto_updates() {
-  if get_yes_no "Would you like to configure automatic security updates?"; then
-    msg_info "Setting up unattended-upgrades..."
-    
-    # Install required packages
-    apt install -y unattended-upgrades apt-listchanges
-    
-    # Configure automatic updates
-    cat > /etc/apt/apt.conf.d/20auto-upgrades << EOF
-APT::Periodic::Update-Package-Lists "1";
-APT::Periodic::Unattended-Upgrade "1";
-APT::Periodic::AutocleanInterval "7";
-EOF
-    
-    # Disable automatic reboot in configuration (but don't mention it in summary)
-    sed -i "s|^Unattended-Upgrade::Automatic-Reboot \".*\";|Unattended-Upgrade::Automatic-Reboot \"false\";|" /etc/apt/apt.conf.d/50unattended-upgrades 2>/dev/null
-    if ! grep -q "Unattended-Upgrade::Automatic-Reboot" /etc/apt/apt.conf.d/50unattended-upgrades; then
-      echo 'Unattended-Upgrade::Automatic-Reboot "false";' >> /etc/apt/apt.conf.d/50unattended-upgrades
-    fi
-    
-    # Restart unattended-upgrades service
-    systemctl restart unattended-upgrades
-    
-    msg_ok "Automatic security updates configured successfully"
-    echo "Automatic security updates: Enabled" >> "$SUMMARY_FILE"
-    # Removed the reboot line from the summary
-  else
-    msg_info "Automatic security updates not configured"
-    echo "Automatic security updates: Not configured" >> "$SUMMARY_FILE"
-  fi
-}
-
-#########################
-# SUMMARY AND COMPLETION
-#########################
-
-# Function to display security summary
-display_security_summary() {
-  # Get server IP
-  server_ip=$(hostname -I | awk '{print $1}')
-  
-  echo
-  echo "=== Debian Express Security Summary ==="
-  echo
-  echo "System Information:"
-  echo "• Hostname: ${HIGHLIGHT}$(hostname)${CL}"
-  echo "• IP Address: ${HIGHLIGHT}$server_ip${CL}"
-  echo "• OS: ${HIGHLIGHT}$(lsb_release -ds 2>/dev/null || cat /etc/debian_version 2>/dev/null || echo "Debian-based")${CL}"
-  echo
-  
-  # Organize summary into sections
-  echo "SSH Configuration:"
-  grep -E "Root SSH|SSH keys|Public key|Password auth|SSH access" "$SUMMARY_FILE" | while IFS= read -r line; do
-    key=$(echo "$line" | cut -d':' -f1)
-    value=$(echo "$line" | cut -d':' -f2-)
-    echo "• $key: ${HIGHLIGHT}$value${CL}"
-  done
-  echo
-  
-  # Sudo Configuration
-  if grep -q "Passwordless sudo" "$SUMMARY_FILE"; then
-    echo "Sudo Configuration:"
-    grep "Passwordless sudo" "$SUMMARY_FILE" | while IFS= read -r line; do
-      key=$(echo "$line" | cut -d':' -f1)
-      value=$(echo "$line" | cut -d':' -f2-)
-      echo "• $key: ${HIGHLIGHT}$value${CL}"
-    done
-    echo
-  fi
-  
-  # Firewall Configuration
-  echo "Firewall Configuration:"
-  grep -E "^Firewall \(UFW\)" "$SUMMARY_FILE" | while IFS= read -r line; do
-    key=$(echo "$line" | cut -d':' -f1)
-    value=$(echo "$line" | cut -d':' -f2-)
-    echo "• $key: ${HIGHLIGHT}$value${CL}"
-  done
-  echo
-  
-  # Detected Services
-  echo "Detected Services:"
-  if [ -f "$TEMP_DIR/full_services.txt" ]; then
-    # Use our simplified service list if available
-    while IFS= read -r line; do
-      if [[ "$line" != *"Docker containers with exposed ports"* && "$line" != *"  - "* ]]; then
-        echo "• $line"
-      fi
-    done < "$TEMP_DIR/full_services.txt"
-  elif grep -q "Note: The following services were detected" "$SUMMARY_FILE"; then
-    # Fall back to summary file if needed
-    in_services_section=false
-    while IFS= read -r line; do
-      if [[ "$in_services_section" == true ]]; then
-        if [[ "$line" == "• Fail2Ban"* ]]; then
-          in_services_section=false
-          continue
-        fi
-        if [[ "$line" != *"Docker containers with exposed ports"* && "$line" != *"  - "* ]]; then
-          echo "$line"
-        fi
-      fi
-      if [[ "$line" == "• Note: The following services were detected"* ]]; then
-        in_services_section=true
-      fi
-    done < "$SUMMARY_FILE"
-  fi
-  echo
-  
-  # Fail2Ban Configuration
-  echo "Fail2Ban Configuration:"
-  grep -E "^Fail2Ban" "$SUMMARY_FILE" | while IFS= read -r line; do
-    key=$(echo "$line" | cut -d':' -f1)
-    value=$(echo "$line" | cut -d':' -f2-)
-    echo "• $key: ${HIGHLIGHT}$value${CL}"
-  done
-  echo
-  
-  # VPN Configuration
-  if grep -q "^VPN:" "$SUMMARY_FILE"; then
-    echo "VPN Configuration:"
-    grep -E "^VPN:|^Netbird|^Tailscale" "$SUMMARY_FILE" | while IFS= read -r line; do
-      key=$(echo "$line" | cut -d':' -f1)
-      value=$(echo "$line" | cut -d':' -f2-)
-      echo "• $key: ${HIGHLIGHT}$value${CL}"
-    done
-    echo
-  fi
-  
-  # Update Configuration
-  echo "Update Configuration:"
-  grep "Automatic security updates" "$SUMMARY_FILE" | while IFS= read -r line; do
-    key=$(echo "$line" | cut -d':' -f1)
-    value=$(echo "$line" | cut -d':' -f2-)
-    echo "• $key: ${HIGHLIGHT}$value${CL}"
-  done
-  echo
-  
-  # Add VPN firewall commands if available
-  if [ -f "$TEMP_DIR/vpn_firewall.txt" ]; then
-    echo "=== VPN Firewall Commands ==="
-    cat "$TEMP_DIR/vpn_firewall.txt"
-    echo
-  fi
-  
-  # Add Fail2Ban VPN whitelist commands if available
-  if [ -f "$TEMP_DIR/fail2ban_vpn.txt" ]; then
-    echo "=== Fail2Ban VPN Whitelist Commands ==="
-    cat "$TEMP_DIR/fail2ban_vpn.txt"
-    echo
-  fi
-  
-  # Save complete summary to file with the same improvements
-  summary_file="/root/debian-express-security-summary.txt"
-  
-  {
-    echo "=== Debian Express Security Summary ==="
-    echo
-    echo "System Information:"
-    echo "• Hostname: $(hostname)"
-    echo "• IP Address: $server_ip"
-    echo "• OS: $(lsb_release -ds 2>/dev/null || cat /etc/debian_version 2>/dev/null || echo "Debian-based")"
-    echo
-    
-    # Organized sections in the file (without colors)
-    echo "SSH Configuration:"
-    grep -E "Root SSH|SSH keys|Public key|Password auth|SSH access" "$SUMMARY_FILE" | while IFS= read -r line; do
-      echo "• $line"
-    done
-    echo
-    
-    if grep -q "Passwordless sudo" "$SUMMARY_FILE"; then
-      echo "Sudo Configuration:"
-      grep "Passwordless sudo" "$SUMMARY_FILE" | while IFS= read -r line; do
-        echo "• $line"
-      done
-      echo
-    fi
-    
-    echo "Firewall Configuration:"
-    grep -E "^Firewall \(UFW\)" "$SUMMARY_FILE" | while IFS= read -r line; do
-      echo "• $line"
-    done
-    echo
-    
-    echo "Detected Services:"
-    if [ -f "$TEMP_DIR/full_services.txt" ]; then
-      while IFS= read -r line; do
-        if [[ "$line" != *"Docker containers with exposed ports"* && "$line" != *"  - "* ]]; then
-          echo "• $line"
-        fi
-      done < "$TEMP_DIR/full_services.txt"
-    elif grep -q "Note: The following services were detected" "$SUMMARY_FILE"; then
-      in_services_section=false
-      while IFS= read -r line; do
-        if [[ "$in_services_section" == true ]]; then
-          if [[ "$line" == "• Fail2Ban"* ]]; then
-            in_services_section=false
-            continue
-          fi
-          if [[ "$line" != *"Docker containers with exposed ports"* && "$line" != *"  - "* ]]; then
-            echo "$line"
-          fi
-        fi
-        if [[ "$line" == "• Note: The following services were detected"* ]]; then
-          in_services_section=true
-        fi
-      done < "$SUMMARY_FILE"
-    fi
-    echo
-    
-    echo "Fail2Ban Configuration:"
-    grep -E "^Fail2Ban" "$SUMMARY_FILE" | while IFS= read -r line; do
-      echo "• $line"
-    done
-    echo
-    
-    if grep -q "^VPN:" "$SUMMARY_FILE"; then
-      echo "VPN Configuration:"
-      grep -E "^VPN:|^Netbird|^Tailscale" "$SUMMARY_FILE" | while IFS= read -r line; do
-        echo "• $line"
-      done
-      echo
-    fi
-    
-    echo "Update Configuration:"
-    grep "Automatic security updates" "$SUMMARY_FILE" | while IFS= read -r line; do
-      echo "• $line"
-    done
-    echo
-    
-    # Add VPN firewall commands if available
-    if [ -f "$TEMP_DIR/vpn_firewall.txt" ]; then
-      echo "=== VPN Firewall Commands ==="
-      cat "$TEMP_DIR/vpn_firewall.txt"
-      echo
-    fi
-    
-    # Add Fail2Ban VPN whitelist commands if available
-    if [ -f "$TEMP_DIR/fail2ban_vpn.txt" ]; then
-      echo "=== Fail2Ban VPN Whitelist Commands ==="
-      cat "$TEMP_DIR/fail2ban_vpn.txt"
-      echo
-    fi
-  } > "$summary_file"
-  
-  chmod 600 "$summary_file"
-  
-  echo "Complete security summary saved to: $summary_file"
-  echo
-}
-
-# Function to clean up and complete setup
-finalize_security_setup() {
-  msg_info "Finalizing security setup..."
-  
-  # System cleanup
-  apt autoremove -y
-  apt clean
-  
-  # Generate and display the summary
-  display_security_summary
-  
-  msg_ok "Debian Express Security setup completed successfully!"
-  echo
-  echo "Your server has been secured according to your preferences."
-  echo "Please review the summary information provided."
-  echo
-  echo "For security changes to fully apply, it's recommended to reboot your server."
-  echo
-  
-  # Clean up state file to ensure fresh detection on next run
-  if [ -f "$STATE_FILE" ]; then
-    rm -f "$STATE_FILE"
-    msg_ok "State file cleaned up for fresh detection on next run"
-  fi
-  
-  if get_yes_no "Would you like to reboot now?"; then
-    echo "Rebooting system in 5 seconds..."
-    sleep 5
-    reboot
-  else
-    echo "Please remember to reboot your system manually when convenient."
-  fi
-}
-
-# Main function to orchestrate the security setup process
-main() {
-  check_root
-  check_debian_based
-  display_banner
-  detect_os
-  check_setup_script
-  
-  # Confirmation to proceed
-  if ! get_yes_no "This script will help you secure your Debian-based server. Do you want to proceed?"; then
-    echo "Setup cancelled. No changes were made."
-    exit 0
-  fi
-  
-  # Detect installed services
-  detect_services
-  
-  # SSH hardening
-  configure_ssh_security
-  
-  # Firewall configuration
-  configure_firewall
-  
-  # Install and configure Fail2Ban
-  setup_fail2ban
-  
-  # VPN setup
-  setup_vpn
-  
-  # Automatic security updates
-  setup_auto_updates
-  
-  # Finalize setup
-  finalize_security_setup
-}
-
-# Run the main function
-main "$@"$service:$port" >> "$TMP_SERVICES_FILE"
+        echo "$service:$port" >> "$TMP_SERVICES_FILE"
         
         # Improve display for Docker API
         if [ "$service" = "docker" ] && [ "$port" = "2375" ]; then
@@ -1305,6 +744,560 @@ configure_firewall() {
       if get_yes_no "Do you want to enable the firewall now with the configured rules?"; then
         echo "y" | ufw enable
         msg_ok "Firewall enabled successfully"
+        echo "Firewall (UFW): Not configured" >> "$SUMMARY_FILE"
+    
+    # Add detected services to summary for cloud firewall reference
+    if [ -n "$DETECTED_SERVICES_LIST" ]; then
+      echo "Note: The following services were detected. Please ensure your cloud firewall allows these ports:" >> "$SUMMARY_FILE"
+      echo -e "$DETECTED_SERVICES_LIST" >> "$SUMMARY_FILE"
+    fi
+  fi
+}
+
+#######################
+# 3. FAIL2BAN SETUP
+#######################
+
+# Setup Fail2Ban function with simplified configuration
+setup_fail2ban() {
+  if get_yes_no "Would you like to install and configure Fail2Ban? It helps protect your server against brute-force attacks."; then
+    msg_info "Installing Fail2Ban..."
+    apt install -y fail2ban
+    
+    # Create a local configuration with default settings
+    cat > /etc/fail2ban/jail.local << EOF
+[DEFAULT]
+# Ban hosts for 10 minutes (600 seconds)
+bantime = 600
+# Find time window of 10 minutes
+findtime = 600
+# Allow 5 retries
+maxretry = 5
+# Ignore localhost
+ignoreip = 127.0.0.1 ::1
+EOF
+    
+    # Ask for IP whitelist with better formatting and examples
+    echo "Enter IPs or ranges to whitelist (space-separated, leave empty for none):"
+    echo "Examples: 192.168.1.5  10.0.0.0/24  192.168.0.0/16"
+    echo
+    echo -n "> "
+    read -r whitelist_ips
+    echo
+    
+    if [[ -n "$whitelist_ips" ]]; then
+      # Append to ignoreip
+      sed -i "s/ignoreip = 127.0.0.1 ::1/ignoreip = 127.0.0.1 ::1 $whitelist_ips/" /etc/fail2ban/jail.local
+      msg_ok "Added whitelisted IPs: $whitelist_ips"
+      echo "Fail2Ban whitelist: $whitelist_ips" >> "$SUMMARY_FILE"
+    fi
+    
+    # Add SSH jail
+    cat >> /etc/fail2ban/jail.local << EOF
+
+[sshd]
+enabled = true
+port = ssh
+filter = sshd
+logpath = /var/log/auth.log
+maxretry = 5
+EOF
+    
+    # Enable and start Fail2Ban
+    systemctl enable fail2ban
+    systemctl restart fail2ban
+    
+    msg_ok "Fail2Ban installed and configured with default settings"
+    echo "Fail2Ban: Installed and active" >> "$SUMMARY_FILE"
+    echo "Fail2Ban settings: bantime=600s, findtime=600s, maxretry=5" >> "$SUMMARY_FILE"
+    echo "Fail2Ban command to modify settings: sudo nano /etc/fail2ban/jail.local" >> "$SUMMARY_FILE"
+    echo "Fail2Ban command to reload: sudo systemctl reload fail2ban" >> "$SUMMARY_FILE"
+    
+    # Save command for adding VPN subnet to whitelist for later
+    mkdir -p "$TEMP_DIR"
+    echo "To add a VPN subnet to the Fail2Ban whitelist later, use:" > "$TEMP_DIR/fail2ban_vpn.txt"
+    echo "sudo fail2ban-client set sshd addignoreip VPN_SUBNET" >> "$TEMP_DIR/fail2ban_vpn.txt"
+    echo "# Example: sudo fail2ban-client set sshd addignoreip 10.8.0.0/24" >> "$TEMP_DIR/fail2ban_vpn.txt"
+    
+    # Wait a moment for the service to fully start
+    echo "Waiting for Fail2Ban service to fully start..."
+    sleep 3
+    
+    # Check service status
+    if systemctl is-active --quiet fail2ban; then
+      echo "Fail2Ban status:"
+      echo
+      fail2ban-client status sshd 2>/dev/null || echo "Fail2Ban is starting up. Run 'sudo fail2ban-client status sshd' later to check status."
+      echo
+    else
+      echo "Fail2Ban status: Service is starting up."
+      echo "Run 'sudo systemctl status fail2ban' later to verify it's running properly."
+      echo
+    fi
+  else
+    msg_info "Fail2Ban installation skipped"
+    echo "Fail2Ban: Not installed" >> "$SUMMARY_FILE"
+  fi
+}
+
+###################
+# 4. VPN SETUP
+###################
+
+# Setup VPN function
+setup_vpn() {
+  echo "VPN Setup:"
+  echo
+  echo -e "${HIGHLIGHT}1${CL}) Tailscale"
+  echo -e "${HIGHLIGHT}2${CL}) Netbird"
+  echo -e "${HIGHLIGHT}3${CL}) Skip VPN setup"
+  echo
+  echo -n "Select an option [1-3]: "
+  read -r vpn_choice
+  echo
+  
+  case $vpn_choice in
+    1)
+      setup_tailscale
+      ;;
+    2)
+      setup_netbird
+      ;;
+    3)
+      msg_info "VPN setup skipped"
+      echo "VPN: Not configured" >> "$SUMMARY_FILE"
+      ;;
+    *)
+      msg_info "VPN setup skipped"
+      echo "VPN: Not configured" >> "$SUMMARY_FILE"
+      ;;
+  esac
+}
+
+# Setup Tailscale function
+setup_tailscale() {
+  msg_info "Installing Tailscale..."
+  
+  # Add Tailscale repository and install
+  curl -fsSL https://tailscale.com/install.sh | sh
+  
+  if [[ $? -eq 0 ]]; then
+    msg_ok "Tailscale installed successfully"
+    
+    auth_key=""
+    if get_yes_no "Do you have a Tailscale auth key? If not, select 'n' and you'll be given a URL to authenticate manually."; then
+      echo -n "Enter your Tailscale auth key: "
+      read -r auth_key
+      echo
+    fi
+    
+    if [[ -n "$auth_key" ]]; then
+      tailscale up --authkey="$auth_key"
+      msg_ok "Tailscale configured with auth key"
+    else
+      # Start Tailscale without auth key
+      tailscale up
+      msg_info "Tailscale started. Please authenticate using the URL above."
+      echo -n "Press Enter once you've authenticated... "
+      read
+      echo
+    fi
+    
+    # Get Tailscale IP and subnet
+    tailscale_ip=$(tailscale ip 2>/dev/null || echo "Unknown")
+    tailscale_subnet="100.64.0.0/10"  # Default Tailscale subnet
+    
+    # Save command for allowing VPN subnet in firewall for later
+    mkdir -p "$TEMP_DIR"
+    echo "# To allow traffic from the Tailscale VPN subnet in UFW:" > "$TEMP_DIR/vpn_firewall.txt"
+    echo "sudo ufw allow from $tailscale_subnet comment 'Tailscale VPN subnet'" >> "$TEMP_DIR/vpn_firewall.txt"
+    
+    # Save command for Fail2Ban whitelist
+    echo "# To add the Tailscale subnet to Fail2Ban whitelist:" >> "$TEMP_DIR/fail2ban_vpn.txt"
+    echo "sudo fail2ban-client set sshd addignoreip $tailscale_subnet" >> "$TEMP_DIR/fail2ban_vpn.txt"
+    
+    echo "Tailscale has been successfully configured."
+    echo
+    echo -e "Your Tailscale IP: ${HIGHLIGHT}$tailscale_ip${CL}"
+    echo -e "Tailscale subnet: ${HIGHLIGHT}$tailscale_subnet${CL}"
+    echo
+    
+    echo "VPN: Tailscale" >> "$SUMMARY_FILE"
+    echo "Tailscale IP: $tailscale_ip" >> "$SUMMARY_FILE"
+    echo "Tailscale subnet: $tailscale_subnet" >> "$SUMMARY_FILE"
+  else
+    msg_error "Tailscale installation failed"
+    echo "VPN: Tailscale installation failed" >> "$SUMMARY_FILE"
+  fi
+}
+
+# Setup Netbird function with improved IP detection
+setup_netbird() {
+  msg_info "Installing Netbird..."
+  
+  # Add Netbird repository and install
+  curl -fsSL https://pkgs.netbird.io/install.sh | sh
+  
+  if [[ $? -eq 0 ]]; then
+    msg_ok "Netbird installed successfully"
+    
+    echo -n "Enter your Netbird setup key: "
+    read -r setup_key
+    echo
+    
+    if [[ -n "$setup_key" ]]; then
+      netbird up --setup-key "$setup_key"
+      msg_ok "Netbird configured with setup key"
+      
+      # Get Netbird IP with improved detection
+      sleep 2 # Give time for interface to come up
+      
+      # Try multiple ways to detect the Netbird interface and IP
+      netbird_ip="Unknown"
+      # First try the standard interface name
+      if ip addr show netbird0 2>/dev/null | grep -q "inet "; then
+        netbird_ip=$(ip addr show netbird0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "Unknown")
+      # If that fails, try with netbird command
+      elif command -v netbird >/dev/null; then
+        netbird_status=$(netbird status 2>/dev/null)
+        if [[ $? -eq 0 ]]; then
+          netbird_ip=$(echo "$netbird_status" | grep -oP 'IP:\s*\K[0-9.]+' || echo "Unknown")
+        fi
+      # If all else fails, try to find any interface that might be netbird
+      else
+        for iface in $(ip -o link | awk -F': ' '{print $2}' | grep -E 'netbird|nb'); do
+          if ip addr show "$iface" 2>/dev/null | grep -q "inet "; then
+            netbird_ip=$(ip addr show "$iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "Unknown")
+            break
+          fi
+        done
+      fi
+      
+      echo -n "Enter your Netbird IP range (e.g., 100.92.0.0/16): "
+      read -r netbird_subnet
+      netbird_subnet=${netbird_subnet:-"100.92.0.0/16"}
+      echo
+      
+      # Save command for allowing VPN subnet in firewall for later
+      mkdir -p "$TEMP_DIR"
+      echo "# To allow traffic from the Netbird VPN subnet in UFW:" > "$TEMP_DIR/vpn_firewall.txt"
+      echo "sudo ufw allow from $netbird_subnet comment 'Netbird VPN subnet'" >> "$TEMP_DIR/vpn_firewall.txt"
+      
+      # Save command for Fail2Ban whitelist
+      echo "# To add the Netbird subnet to Fail2Ban whitelist:" >> "$TEMP_DIR/fail2ban_vpn.txt"
+      echo "sudo fail2ban-client set sshd addignoreip $netbird_subnet" >> "$TEMP_DIR/fail2ban_vpn.txt"
+      
+      echo "Netbird has been successfully configured."
+      echo
+      echo -e "Your Netbird IP: ${HIGHLIGHT}$netbird_ip${CL}"
+      echo -e "Netbird subnet: ${HIGHLIGHT}$netbird_subnet${CL}"
+      echo
+      
+      echo "VPN: Netbird" >> "$SUMMARY_FILE"
+      echo "Netbird IP: $netbird_ip" >> "$SUMMARY_FILE"
+      echo "Netbird subnet: $netbird_subnet" >> "$SUMMARY_FILE"
+    else
+      msg_error "Netbird setup key not provided"
+      echo "VPN: Netbird configuration failed (no setup key)" >> "$SUMMARY_FILE"
+    fi
+  else
+    msg_error "Netbird installation failed"
+    echo "VPN: Netbird installation failed" >> "$SUMMARY_FILE"
+  fi
+}
+
+##############################
+# 5. AUTOMATIC SECURITY UPDATES
+##############################
+
+# Function to set up automatic security updates
+setup_auto_updates() {
+  if get_yes_no "Would you like to configure automatic security updates?"; then
+    msg_info "Setting up unattended-upgrades..."
+    
+    # Install required packages
+    apt install -y unattended-upgrades apt-listchanges
+    
+    # Configure automatic updates
+    cat > /etc/apt/apt.conf.d/20auto-upgrades << EOF
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+EOF
+    
+    # Disable automatic reboot in configuration (but don't mention it in summary)
+    sed -i "s|^Unattended-Upgrade::Automatic-Reboot \".*\";|Unattended-Upgrade::Automatic-Reboot \"false\";|" /etc/apt/apt.conf.d/50unattended-upgrades 2>/dev/null
+    if ! grep -q "Unattended-Upgrade::Automatic-Reboot" /etc/apt/apt.conf.d/50unattended-upgrades; then
+      echo 'Unattended-Upgrade::Automatic-Reboot "false";' >> /etc/apt/apt.conf.d/50unattended-upgrades
+    fi
+    
+    # Restart unattended-upgrades service
+    systemctl restart unattended-upgrades
+    
+    msg_ok "Automatic security updates configured successfully"
+    echo "Automatic security updates: Enabled" >> "$SUMMARY_FILE"
+    # Removed the reboot line from the summary
+  else
+    msg_info "Automatic security updates not configured"
+    echo "Automatic security updates: Not configured" >> "$SUMMARY_FILE"
+  fi
+}
+
+#########################
+# SUMMARY AND COMPLETION
+#########################
+
+# Function to display security summary
+display_security_summary() {
+  # Get server IP
+  server_ip=$(hostname -I | awk '{print $1}')
+  
+  echo
+  echo "=== Debian Express Security Summary ==="
+  echo
+  echo "System Information:"
+  echo "• Hostname: ${HIGHLIGHT}$(hostname)${CL}"
+  echo "• IP Address: ${HIGHLIGHT}$server_ip${CL}"
+  echo "• OS: ${HIGHLIGHT}$(lsb_release -ds 2>/dev/null || cat /etc/debian_version 2>/dev/null || echo "Debian-based")${CL}"
+  echo
+  
+  # Organize summary into sections
+  echo "SSH Configuration:"
+  grep -E "Root SSH|SSH keys|Public key|Password auth|SSH access" "$SUMMARY_FILE" | while IFS= read -r line; do
+    key=$(echo "$line" | cut -d':' -f1)
+    value=$(echo "$line" | cut -d':' -f2-)
+    echo "• $key: ${HIGHLIGHT}$value${CL}"
+  done
+  echo
+  
+  # Sudo Configuration
+  if grep -q "Passwordless sudo" "$SUMMARY_FILE"; then
+    echo "Sudo Configuration:"
+    grep "Passwordless sudo" "$SUMMARY_FILE" | while IFS= read -r line; do
+      key=$(echo "$line" | cut -d':' -f1)
+      value=$(echo "$line" | cut -d':' -f2-)
+      echo "• $key: ${HIGHLIGHT}$value${CL}"
+    done
+    echo
+  fi
+  
+  # Firewall Configuration
+  echo "Firewall Configuration:"
+  grep -E "^Firewall \(UFW\)" "$SUMMARY_FILE" | while IFS= read -r line; do
+    key=$(echo "$line" | cut -d':' -f1)
+    value=$(echo "$line" | cut -d':' -f2-)
+    echo "• $key: ${HIGHLIGHT}$value${CL}"
+  done
+  echo
+  
+  # Detected Services
+  echo "Detected Services:"
+  if [ -f "$TEMP_DIR/full_services.txt" ]; then
+    # Use our simplified service list if available
+    while IFS= read -r line; do
+      if [[ "$line" != *"Docker containers with exposed ports"* && "$line" != *"  - "* ]]; then
+        echo "• $line"
+      fi
+    done < "$TEMP_DIR/full_services.txt"
+  elif grep -q "Note: The following services were detected" "$SUMMARY_FILE"; then
+    # Fall back to summary file if needed
+    in_services_section=false
+    while IFS= read -r line; do
+      if [[ "$in_services_section" == true ]]; then
+        if [[ "$line" == "• Fail2Ban"* ]]; then
+          in_services_section=false
+          continue
+        fi
+        if [[ "$line" != *"Docker containers with exposed ports"* && "$line" != *"  - "* ]]; then
+          echo "$line"
+        fi
+      fi
+      if [[ "$line" == "• Note: The following services were detected"* ]]; then
+        in_services_section=true
+      fi
+    done < "$SUMMARY_FILE"
+  fi
+  echo
+  
+  # Fail2Ban Configuration
+  echo "Fail2Ban Configuration:"
+  grep -E "^Fail2Ban" "$SUMMARY_FILE" | while IFS= read -r line; do
+    key=$(echo "$line" | cut -d':' -f1)
+    value=$(echo "$line" | cut -d':' -f2-)
+    echo "• $key: ${HIGHLIGHT}$value${CL}"
+  done
+  echo
+  
+  # VPN Configuration
+  if grep -q "^VPN:" "$SUMMARY_FILE"; then
+    echo "VPN Configuration:"
+    grep -E "^VPN:|^Netbird|^Tailscale" "$SUMMARY_FILE" | while IFS= read -r line; do
+      key=$(echo "$line" | cut -d':' -f1)
+      value=$(echo "$line" | cut -d':' -f2-)
+      echo "• $key: ${HIGHLIGHT}$value${CL}"
+    done
+    echo
+  fi
+  
+  # Update Configuration
+  echo "Update Configuration:"
+  grep "Automatic security updates" "$SUMMARY_FILE" | while IFS= read -r line; do
+    key=$(echo "$line" | cut -d':' -f1)
+    value=$(echo "$line" | cut -d':' -f2-)
+    echo "• $key: ${HIGHLIGHT}$value${CL}"
+  done
+  echo
+  
+  # Add VPN firewall commands if available
+  if [ -f "$TEMP_DIR/vpn_firewall.txt" ]; then
+    echo "=== VPN Firewall Commands ==="
+    cat "$TEMP_DIR/vpn_firewall.txt"
+    echo
+  fi
+  
+  # Add Fail2Ban VPN whitelist commands if available
+  if [ -f "$TEMP_DIR/fail2ban_vpn.txt" ]; then
+    echo "=== Fail2Ban VPN Whitelist Commands ==="
+    cat "$TEMP_DIR/fail2ban_vpn.txt"
+    echo
+  fi
+  
+  # Save complete summary to file with the same improvements
+  summary_file="/root/debian-express-security-summary.txt"
+  
+  {
+    echo "=== Debian Express Security Summary ==="
+    echo
+    echo "System Information:"
+    echo "• Hostname: $(hostname)"
+    echo "• IP Address: $server_ip"
+    echo "• OS: $(lsb_release -ds 2>/dev/null || cat /etc/debian_version 2>/dev/null || echo "Debian-based")"
+    echo
+    
+    # Organized sections in the file (without colors)
+    echo "SSH Configuration:"
+    grep -E "Root SSH|SSH keys|Public key|Password auth|SSH access" "$SUMMARY_FILE" | while IFS= read -r line; do
+      echo "• $line"
+    done
+    echo
+    
+    if grep -q "Passwordless sudo" "$SUMMARY_FILE"; then
+      echo "Sudo Configuration:"
+      grep "Passwordless sudo" "$SUMMARY_FILE" | while IFS= read -r line; do
+        echo "• $line"
+      done
+      echo
+    fi
+    
+    echo "Firewall Configuration:"
+    grep -E "^Firewall \(UFW\)" "$SUMMARY_FILE" | while IFS= read -r line; do
+      echo "• $line"
+    done
+    echo
+    
+    echo "Detected Services:"
+    if [ -f "$TEMP_DIR/full_services.txt" ]; then
+      while IFS= read -r line; do
+        if [[ "$line" != *"Docker containers with exposed ports"* && "$line" != *"  - "* ]]; then
+          echo "• $line"
+        fi
+      done < "$TEMP_DIR/full_services.txt"
+    elif grep -q "Note: The following services were detected" "$SUMMARY_FILE"; then
+      in_services_section=false
+      while IFS= read -r line; do
+        if [[ "$in_services_section" == true ]]; then
+          if [[ "$line" == "• Fail2Ban"* ]]; then
+            in_services_section=false
+            continue
+          fi
+          if [[ "$line" != *"Docker containers with exposed ports"* && "$line" != *"  - "* ]]; then
+            echo "$line"
+          fi
+        fi
+        if [[ "$line" == "• Note: The following services were detected"* ]]; then
+          in_services_section=true
+        fi
+      done < "$SUMMARY_FILE"
+    fi
+    echo
+    
+    echo "Fail2Ban Configuration:"
+    grep -E "^Fail2Ban" "$SUMMARY_FILE" | while IFS= read -r line; do
+      echo "• $line"
+    done
+    echo
+    
+    if grep -q "^VPN:" "$SUMMARY_FILE"; then
+      echo "VPN Configuration:"
+      grep -E "^VPN:|^Netbird|^Tailscale" "$SUMMARY_FILE" | while IFS= read -r line; do
+        echo "• $line"
+      done
+      echo
+    fi
+    
+    echo "Update Configuration:"
+    grep "Automatic security updates" "$SUMMARY_FILE" | while IFS= read -r line; do
+      echo "• $line"
+    done
+    echo
+    
+    # Add VPN firewall commands if available
+    if [ -f "$TEMP_DIR/vpn_firewall.txt" ]; then
+      echo "=== VPN Firewall Commands ==="
+      cat "$TEMP_DIR/vpn_firewall.txt"
+      echo
+    fi
+    
+    # Add Fail2Ban VPN whitelist commands if available
+    if [ -f "$TEMP_DIR/fail2ban_vpn.txt" ]; then
+      echo "=== Fail2Ban VPN Whitelist Commands ==="
+      cat "$TEMP_DIR/fail2ban_vpn.txt"
+      echo
+    fi
+  } > "$summary_file"
+  
+  chmod 600 "$summary_file"
+  
+  echo "Complete security summary saved to: $summary_file"
+  echo
+}
+
+# Function to clean up and complete setup
+
+  apt autoremove -y
+  apt clean
+  
+  # Generate and display the summary
+  display_security_summary
+  
+  msg_ok "Debian Express Security setup completed successfully!"
+  echo
+  echo "Your server has been secured according to your preferences."
+  echo "Please review the summary information provided."
+  echo
+  echo "For security changes to fully apply, it's recommended to reboot your server."
+  echo
+  
+  # Clean up state file to ensure fresh detection on next run
+  if [ -f "$STATE_FILE" ]; then
+    rm -f "$STATE_FILE"
+    msg_ok "State file cleaned up for fresh detection on next run"
+  fi
+  
+  if get_yes_no "Would you like to reboot now?"; then
+    echo "Rebooting system in 5 seconds..."
+    sleep 5
+    reboot
+  else
+    echo "Please remember to reboot your system manually when convenient."
+  fi
+} (UFW): Active but not reloaded" >> "$SUMMARY_FILE"
+      fi
+    fi
+  else
+    msg_info "UFW configuration skipped"
+    echo "Firewall (UFW): Active and reloaded" >> "$SUMMARY_FILE"
+      else
         echo "Firewall (UFW): Enabled" >> "$SUMMARY_FILE"
       else
         msg_info "Firewall configured but not enabled"
@@ -1314,6 +1307,4 @@ configure_firewall() {
       if get_yes_no "Firewall is already active. Do you want to reload the configuration?"; then
         ufw reload
         msg_ok "Firewall configuration reloaded"
-        echo "Firewall (UFW): Active and reloaded" >> "$SUMMARY_FILE"
-      else
-        echo "
+        echo "Firewall
