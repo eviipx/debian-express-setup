@@ -11,164 +11,7 @@ GN="\033[0;32m"
 YW="\033[33m"
 BL="\033[0;34m"
 CL="\033[m"
-CM="${GN}✓${CL}"
-CROSS="${RD}✗${CL}"
-INFO="${YW}→${CL}"
-HIGHLIGHT="${BL}"
-
-# Create a temporary directory for storing installation states
-TEMP_DIR="/tmp/debian-express"
-STATE_FILE="$TEMP_DIR/installed-services.txt"
-SUMMARY_FILE="$TEMP_DIR/security-summary.txt"
-mkdir -p "$TEMP_DIR"
-touch "$STATE_FILE"
-touch "$SUMMARY_FILE"
-
-# Function to display success messages
-msg_ok() {
-  echo -e "${CM} $1"
-  echo
-}
-
-# Function to display info messages
-msg_info() {
-  echo -e "${INFO} $1"
-  echo
-}
-
-# Function to display error messages
-msg_error() {
-  echo -e "${CROSS} $1"
-  echo
-}
-
-# Function to get yes/no input from user - FIXED to prevent syntax errors
-get_yes_no() {
-  local prompt="$1"
-  local response
-  
-  while true; do
-    # Fixed line to escape parentheses properly
-    echo -e -n "${prompt} [${HIGHLIGHT}y${CL}/${HIGHLIGHT}n${CL}]: "
-    read -r response
-    case $response in
-      [Yy]* ) echo; return 0 ;;
-      [Nn]* ) echo; return 1 ;;
-      * ) echo "Please answer yes or no." ;;
-    esac
-  done
-}
-
-# Function to check for root privileges
-check_root() {
-  if [[ "$EUID" -ne 0 ]]; then
-    msg_error "This script must be run as root"
-    exit 1
-  fi
-}
-
-# Function to check if it's a Debian-based system
-check_debian_based() {
-  if [ ! -f /etc/debian_version ]; then
-    msg_error "This script is designed for Debian-based systems only!"
-    exit 1
-  fi
-}
-
-# Detect OS version and display it
-detect_os() {
-  if [ -f /etc/debian_version ]; then
-    OS_VERSION=$(cat /etc/debian_version)
-    if [ -f /etc/lsb-release ]; then
-      OS_NAME="Ubuntu"
-      OS_PRETTY=$(lsb_release -ds)
-    else
-      OS_NAME="Debian"
-      OS_PRETTY="Debian ${OS_VERSION}"
-    fi
-    echo -e "Detected system: ${GN}${OS_PRETTY}${CL}\n"
-    return 0
-  else
-    return 1  # Not a Debian-based system
-  fi
-}
-
-# Function to display script banner
-display_banner() {
-  clear
-  cat <<"EOF"
- ____       _     _                _____                              
-|  _ \  ___| |__ (_) __ _ _ __   | ____|_  ___ __  _ __ ___  ___ ___ 
-| | | |/ _ \ '_ \| |/ _` | '_ \  |  _| \ \/ / '_ \| '__/ _ \/ __/ __|
-| |_| |  __/ |_) | | (_| | | | | | |___ >  <| |_) | | |  __/\__ \__ \
-|____/ \___|_.__/|_|\__,_|_| |_| |_____/_/\_\ .__/|_|  \___||___/___/
-                                            |_|                      
-  ____                            
- / ___|  ___  ___ _   _ _ __ ___ 
- \___ \ / _ \/ __| | | | '__/ _ \
-  ___) |  __/ (__| |_| | | |  __/
- |____/ \___|\___|\__,_|_|  \___|
-                                 
-EOF
-
-  echo -e "\n${BL}Security & Network Configuration${CL}\n"
-}
-
-# Function to check if setup script was run
-check_setup_script() {
-  if [ ! -f "$STATE_FILE" ]; then
-    if get_yes_no "It appears that debian-express-setup.sh has not been run yet or no services were installed. It's recommended to run the setup script first. Continue anyway?"; then
-      return 0
-    else
-      echo "Please run debian-express-setup.sh first."
-      exit 0
-    fi
-  fi
-}
-
-# Function to detect services from state file and running processes
-detect_services() {
-  msg_info "Detecting installed services..."
-  
-  # Create a clean temporary file for processed services
-  TMP_SERVICES_FILE=$(mktemp)
-  DETECTED_SERVICES_LIST=""
-  FULL_SERVICES_LIST=""
-  
-  # Track services we've already seen to prevent duplicates
-  declare -A seen_services
-  
-  # Read from the state file created by the setup script (if it exists)
-  if [ -f "$STATE_FILE" ]; then
-    while IFS=: read -r service port; do
-      if [ -n "$service" ] && [ -n "$port" ]; then
-        # Skip if we've seen this service:port combination already
-        service_key="${service}:${port}"
-        if [ -n "${seen_services[$service_key]}" ]; then
-          continue
-        fi
-        
-        seen_services["$service_key"]=1
-        echo "Firewall (UFW): Active but not reloaded" >> "$SUMMARY_FILE"
-      fi
-    fi
-    
-    # Show UFW rules summary
-    echo "Current firewall configuration:"
-    echo
-    ufw status verbose
-    echo
-  else
-    msg_info "UFW configuration skipped"
-    echo "Firewall (UFW): Not configured" >> "$SUMMARY_FILE"
-    
-    # Add detected services to summary for cloud firewall reference
-    if [ -n "$DETECTED_SERVICES_LIST" ]; then
-      echo "Note: The following services were detected. Please ensure your cloud firewall allows these ports:" >> "$SUMMARY_FILE"
-      echo -e "$DETECTED_SERVICES_LIST" >> "$SUMMARY_FILE"
-    fi
-  fi
-}
+CM="${GN}
 
 #######################
 # 3. FAIL2BAN SETUP
@@ -749,7 +592,144 @@ main() {
 }
 
 # Run the main function
-main "$@"$service:$port" >> "$TMP_SERVICES_FILE"
+main "$@"✓${CL}"
+CROSS="${RD}✗${CL}"
+INFO="${YW}→${CL}"
+HIGHLIGHT="${BL}"
+
+# Create a temporary directory for storing installation states
+TEMP_DIR="/tmp/debian-express"
+STATE_FILE="$TEMP_DIR/installed-services.txt"
+SUMMARY_FILE="$TEMP_DIR/security-summary.txt"
+mkdir -p "$TEMP_DIR"
+touch "$STATE_FILE"
+touch "$SUMMARY_FILE"
+
+# Function to display success messages
+msg_ok() {
+  echo -e "${CM} $1"
+  echo
+}
+
+# Function to display info messages
+msg_info() {
+  echo -e "${INFO} $1"
+  echo
+}
+
+# Function to display error messages
+msg_error() {
+  echo -e "${CROSS} $1"
+  echo
+}
+
+# Function to get yes/no input from user
+get_yes_no() {
+  local prompt="$1"
+  local response
+  
+  while true; do
+    echo -e -n "${prompt} [${HIGHLIGHT}y${CL}/${HIGHLIGHT}n${CL}]: "
+    read -r response
+    case $response in
+      [Yy]* ) echo; return 0 ;;
+      [Nn]* ) echo; return 1 ;;
+      * ) echo "Please answer yes or no." ;;
+    esac
+  done
+}
+
+# Function to check for root privileges
+check_root() {
+  if [[ "$EUID" -ne 0 ]]; then
+    msg_error "This script must be run as root"
+    exit 1
+  fi
+}
+
+# Function to check if it's a Debian-based system
+check_debian_based() {
+  if [ ! -f /etc/debian_version ]; then
+    msg_error "This script is designed for Debian-based systems only!"
+    exit 1
+  fi
+}
+
+# Detect OS version and display it
+detect_os() {
+  if [ -f /etc/debian_version ]; then
+    OS_VERSION=$(cat /etc/debian_version)
+    if [ -f /etc/lsb-release ]; then
+      OS_NAME="Ubuntu"
+      OS_PRETTY=$(lsb_release -ds)
+    else
+      OS_NAME="Debian"
+      OS_PRETTY="Debian ${OS_VERSION}"
+    fi
+    echo -e "Detected system: ${GN}${OS_PRETTY}${CL}\n"
+    return 0
+  else
+    return 1  # Not a Debian-based system
+  fi
+}
+
+# Function to display script banner
+display_banner() {
+  clear
+  cat <<"EOF"
+ ____       _     _                _____                              
+|  _ \  ___| |__ (_) __ _ _ __   | ____|_  ___ __  _ __ ___  ___ ___ 
+| | | |/ _ \ '_ \| |/ _` | '_ \  |  _| \ \/ / '_ \| '__/ _ \/ __/ __|
+| |_| |  __/ |_) | | (_| | | | | | |___ >  <| |_) | | |  __/\__ \__ \
+|____/ \___|_.__/|_|\__,_|_| |_| |_____/_/\_\ .__/|_|  \___||___/___/
+                                            |_|                      
+  ____                            
+ / ___|  ___  ___ _   _ _ __ ___ 
+ \___ \ / _ \/ __| | | | '__/ _ \
+  ___) |  __/ (__| |_| | | |  __/
+ |____/ \___|\___|\__,_|_|  \___|
+                                 
+EOF
+
+  echo -e "\n${BL}Security & Network Configuration${CL}\n"
+}
+
+# Function to check if setup script was run
+check_setup_script() {
+  if [ ! -f "$STATE_FILE" ]; then
+    if get_yes_no "It appears that debian-express-setup.sh has not been run yet or no services were installed. It's recommended to run the setup script first. Continue anyway?"; then
+      return 0
+    else
+      echo "Please run debian-express-setup.sh first."
+      exit 0
+    fi
+  fi
+}
+
+# Function to detect services from state file and running processes
+detect_services() {
+  msg_info "Detecting installed services..."
+  
+  # Create a clean temporary file for processed services
+  TMP_SERVICES_FILE=$(mktemp)
+  DETECTED_SERVICES_LIST=""
+  FULL_SERVICES_LIST=""
+  
+  # Track services we've already seen to prevent duplicates
+  declare -A seen_services
+  
+  # Read from the state file created by the setup script (if it exists)
+  if [ -f "$STATE_FILE" ]; then
+    while IFS=: read -r service port; do
+      if [ -n "$service" ] && [ -n "$port" ]; then
+        # Skip if we've seen this service:port combination already
+        service_key="${service}:${port}"
+        if [ -n "${seen_services[$service_key]}" ]; then
+          continue
+        fi
+        
+        seen_services["$service_key"]=1
+        echo "$service:$port" >> "$TMP_SERVICES_FILE"
         
         # Improve display for Docker API
         if [ "$service" = "docker" ] && [ "$port" = "2375" ]; then
@@ -1188,6 +1168,10 @@ setup_passwordless_sudo() {
 # 2. FIREWALL SETUP
 #######################
 
+#######################
+# 2. FIREWALL SETUP
+#######################
+
 # Function to optionally configure UFW
 configure_firewall() {
   if get_yes_no "Would you like to install and configure UFW (Uncomplicated Firewall)?"; then
@@ -1315,5 +1299,22 @@ configure_firewall() {
         ufw reload
         msg_ok "Firewall configuration reloaded"
         echo "Firewall (UFW): Active and reloaded" >> "$SUMMARY_FILE"
-      else
-        echo "
+      fi
+    fi
+    
+    # Show UFW rules summary
+    echo "Current firewall configuration:"
+    echo
+    ufw status verbose
+    echo
+  else
+    msg_info "UFW configuration skipped"
+    echo "Firewall (UFW): Not configured" >> "$SUMMARY_FILE"
+    
+    # Add detected services to summary for cloud firewall reference
+    if [ -n "$DETECTED_SERVICES_LIST" ]; then
+      echo "Note: The following services were detected. Please ensure your cloud firewall allows these ports:" >> "$SUMMARY_FILE"
+      echo -e "$DETECTED_SERVICES_LIST" >> "$SUMMARY_FILE"
+    fi
+  fi
+}
