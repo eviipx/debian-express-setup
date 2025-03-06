@@ -1,1314 +1,673 @@
-#######################
-# 3. FAIL2BAN SETUP
-#######################
+#!/usr/bin/env bash
+# -------------------------------------------------------------------------
+# Debian Express Secure Setup - SINGLE MERGED SCRIPT
+#   Combines debian-express-environment.sh and debian-express-secure.sh
+#
+# Source Repo: https://github.com/eviipx/debian-express-setup
+# -------------------------------------------------------------------------
+# Usage:
+#   sudo bash debian-express-secure.sh
+# -------------------------------------------------------------------------
 
-# Setup Fail2Ban function with simplified configuration
-setup_fail2ban() {
-  if get_yes_no "Would you like to install and configure Fail2Ban? It helps protect your server against brute-force attacks."; then
-    msg_info "Installing Fail2Ban..."
-    apt install -y fail2ban
-    
-    # Create a local configuration with default settings
-    cat > /etc/fail2ban/jail.local << EOF
-[DEFAULT]
-# Ban hosts for 10 minutes (600 seconds)
-bantime = 600
-# Find time window of 10 minutes
-findtime = 600
-# Allow 5 retries
-maxretry = 5
-# Ignore localhost
-ignoreip = 127.0.0.1 ::1
-EOF
-    
-    # Ask for IP whitelist with better formatting and examples
-    echo "Enter IPs or ranges to whitelist (space-separated, leave empty for none):"
-    echo "Examples: 192.168.1.5  10.0.0.0/24  192.168.0.0/16"
-    echo
-    echo -n "> "
-    read -r whitelist_ips
-    echo
-    
-    if [[ -n "$whitelist_ips" ]]; then
-      # Append to ignoreip
-      sed -i "s/ignoreip = 127.0.0.1 ::1/ignoreip = 127.0.0.1 ::1 $whitelist_ips/" /etc/fail2ban/jail.local
-      msg_ok "Added whitelisted IPs: $whitelist_ips"
-      echo "Fail2Ban whitelist: $whitelist_ips" >> "$SUMMARY_FILE"
-    fi
-    
-    # Add SSH jail
-    cat >> /etc/fail2ban/jail.local << EOF
+################################################################################
+#                  START: debian-express-environment.sh
+################################################################################
+# (Everything below is exactly from the 'debian-express-environment.sh' file,
+#  except we've removed its own #!/usr/bin/env bash line, since we already have
+#  one at the top. No changes made other than that.)
+################################################################################
 
-[sshd]
-enabled = true
-port = ssh
-filter = sshd
-logpath = /var/log/auth.log
-maxretry = 5
-EOF
-    
-    # Enable and start Fail2Ban
-    systemctl enable fail2ban
-    systemctl restart fail2ban
-    
-    msg_ok "Fail2Ban installed and configured with default settings"
-    echo "Fail2Ban: Installed and active" >> "$SUMMARY_FILE"
-    echo "Fail2Ban settings: bantime=600s, findtime=600s, maxretry=5" >> "$SUMMARY_FILE"
-    echo "Fail2Ban command to modify settings: sudo nano /etc/fail2ban/jail.local" >> "$SUMMARY_FILE"
-    echo "Fail2Ban command to reload: sudo systemctl reload fail2ban" >> "$SUMMARY_FILE"
-    
-    # Save command for adding VPN subnet to whitelist for later
-    mkdir -p "$TEMP_DIR"
-    echo "To add a VPN subnet to the Fail2Ban whitelist later, use:" > "$TEMP_DIR/fail2ban_vpn.txt"
-    echo "sudo fail2ban-client set sshd addignoreip VPN_SUBNET" >> "$TEMP_DIR/fail2ban_vpn.txt"
-    echo "# Example: sudo fail2ban-client set sshd addignoreip 10.8.0.0/24" >> "$TEMP_DIR/fail2ban_vpn.txt"
-    
-    # Wait a moment for the service to fully start
-    echo "Waiting for Fail2Ban service to fully start..."
-    sleep 3
-    
-    # Check service status
-    if systemctl is-active --quiet fail2ban; then
-      echo "Fail2Ban status:"
-      echo
-      fail2ban-client status sshd 2>/dev/null || echo "Fail2Ban is starting up. Run 'sudo fail2ban-client status sshd' later to check status."
-      echo
-    else
-      echo "Fail2Ban status: Service is starting up."
-      echo "Run 'sudo systemctl status fail2ban' later to verify it's running properly."
-      echo
-    fi
-  else
-    msg_info "Fail2Ban installation skipped"
-    echo "Fail2Ban: Not installed" >> "$SUMMARY_FILE"
+# --------------------------------------------------------------------------------
+# Title         : Debian Express Setup - Environment
+# Author        : eviip
+# Date          : 2023-06-17
+# Version       : 2.3.2
+# Description   : Common environment variables, functions, and logic for Debian-based scripts.
+# Tested on     : Debian 10, Debian 11
+# --------------------------------------------------------------------------------
+
+# shellcheck disable=SC1091,SC2154,SC2162,SC2034
+
+# set -e -u -o pipefail
+
+C_RESET="\033[0m"
+C_RED="\033[31m"
+C_GREEN="\033[32m"
+C_YELLOW="\033[33m"
+C_BLUE="\033[34m"
+C_MAGENTA="\033[35m"
+C_CYAN="\033[36m"
+C_WHITE="\033[37m"
+C_BOLD="\033[1m"
+C_DIM="\033[2m"
+
+readonly SCRIPT_NAME="$(basename "$0")"
+readonly SCRIPT_VERSION="2.3.2"
+readonly SCRIPT_AUTHOR="eviip"
+
+ROOT_CHECK_FAIL_MESSAGE="This script must be run as root. Use sudo or switch to the root user."
+
+DEBIAN_CHECK_FAIL_MESSAGE="This script is intended for Debian-based systems. Exiting."
+DEBIAN_CHECK_PATH="/etc/debian_version"
+
+SUPPORTED_SETUP_SCRIPTS=("debian-express-environment.sh" "debian-express-secure.sh" "debian-express-docker.sh" "debian-express-services.sh" "debian-express-k3s.sh")
+
+declare DETECTED_OS=""
+declare DETECTED_VERSION=""
+declare -i CONTINUE_SETUP=1
+
+# Standard environment script that might be sourced into all other scripts
+
+check_root() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    echo -e "${C_RED}${BOLD_ON}${ROOT_CHECK_FAIL_MESSAGE}${C_RESET}"
+    exit 1
   fi
 }
 
-###################
-# 4. VPN SETUP
-###################
-
-# Setup VPN function
-setup_vpn() {
-  echo "VPN Setup:"
-  echo
-  echo -e "${HIGHLIGHT}1${CL}) Tailscale"
-  echo -e "${HIGHLIGHT}2${CL}) Netbird"
-  echo -e "${HIGHLIGHT}3${CL}) Skip VPN setup"
-  echo
-  echo -n "Select an option [1-3]: "
-  read -r vpn_choice
-  echo
-  
-  case $vpn_choice in
-    1)
-      setup_tailscale
-      ;;
-    2)
-      setup_netbird
-      ;;
-    3)
-      msg_info "VPN setup skipped"
-      echo "VPN: Not configured" >> "$SUMMARY_FILE"
-      ;;
-    *)
-      msg_info "VPN setup skipped"
-      echo "VPN: Not configured" >> "$SUMMARY_FILE"
-      ;;
-  esac
-}
-
-# Setup Tailscale function
-setup_tailscale() {
-  msg_info "Installing Tailscale..."
-  
-  # Add Tailscale repository and install
-  curl -fsSL https://tailscale.com/install.sh | sh
-  
-  if [[ $? -eq 0 ]]; then
-    msg_ok "Tailscale installed successfully"
-    
-    auth_key=""
-    if get_yes_no "Do you have a Tailscale auth key? If not, select 'n' and you'll be given a URL to authenticate manually."; then
-      echo -n "Enter your Tailscale auth key: "
-      read -r auth_key
-      echo
-    fi
-    
-    if [[ -n "$auth_key" ]]; then
-      tailscale up --authkey="$auth_key"
-      msg_ok "Tailscale configured with auth key"
-    else
-      # Start Tailscale without auth key
-      tailscale up
-      msg_info "Tailscale started. Please authenticate using the URL above."
-      echo -n "Press Enter once you've authenticated... "
-      read
-      echo
-    fi
-    
-    # Get Tailscale IP and subnet
-    tailscale_ip=$(tailscale ip 2>/dev/null || echo "Unknown")
-    tailscale_subnet="100.64.0.0/10"  # Default Tailscale subnet
-    
-    # Save command for allowing VPN subnet in firewall for later
-    mkdir -p "$TEMP_DIR"
-    echo "# To allow traffic from the Tailscale VPN subnet in UFW:" > "$TEMP_DIR/vpn_firewall.txt"
-    echo "sudo ufw allow from $tailscale_subnet comment 'Tailscale VPN subnet'" >> "$TEMP_DIR/vpn_firewall.txt"
-    
-    # Save command for Fail2Ban whitelist
-    echo "# To add the Tailscale subnet to Fail2Ban whitelist:" >> "$TEMP_DIR/fail2ban_vpn.txt"
-    echo "sudo fail2ban-client set sshd addignoreip $tailscale_subnet" >> "$TEMP_DIR/fail2ban_vpn.txt"
-    
-    echo "Tailscale has been successfully configured."
-    echo
-    echo -e "Your Tailscale IP: ${HIGHLIGHT}$tailscale_ip${CL}"
-    echo -e "Tailscale subnet: ${HIGHLIGHT}$tailscale_subnet${CL}"
-    echo
-    
-    echo "VPN: Tailscale" >> "$SUMMARY_FILE"
-    echo "Tailscale IP: $tailscale_ip" >> "$SUMMARY_FILE"
-    echo "Tailscale subnet: $tailscale_subnet" >> "$SUMMARY_FILE"
-  else
-    msg_error "Tailscale installation failed"
-    echo "VPN: Tailscale installation failed" >> "$SUMMARY_FILE"
+check_debian_based() {
+  if [[ ! -f "${DEBIAN_CHECK_PATH}" ]]; then
+    echo -e "${C_RED}${BOLD_ON}${DEBIAN_CHECK_FAIL_MESSAGE}${C_RESET}"
+    exit 1
   fi
 }
 
-# Setup Netbird function with improved IP detection
-setup_netbird() {
-  msg_info "Installing Netbird..."
-  
-  # Add Netbird repository and install
-  curl -fsSL https://pkgs.netbird.io/install.sh | sh
-  
-  if [[ $? -eq 0 ]]; then
-    msg_ok "Netbird installed successfully"
-    
-    echo -n "Enter your Netbird setup key: "
-    read -r setup_key
-    echo
-    
-    if [[ -n "$setup_key" ]]; then
-      netbird up --setup-key "$setup_key"
-      msg_ok "Netbird configured with setup key"
-      
-      # Get Netbird IP with improved detection
-      sleep 2 # Give time for interface to come up
-      
-      # Try multiple ways to detect the Netbird interface and IP
-      netbird_ip="Unknown"
-      # First try the standard interface name
-      if ip addr show netbird0 2>/dev/null | grep -q "inet "; then
-        netbird_ip=$(ip addr show netbird0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "Unknown")
-      # If that fails, try with netbird command
-      elif command -v netbird >/dev/null; then
-        netbird_status=$(netbird status 2>/dev/null)
-        if [[ $? -eq 0 ]]; then
-          netbird_ip=$(echo "$netbird_status" | grep -oP 'IP:\s*\K[0-9.]+' || echo "Unknown")
+check_setup_script() {
+  local script_found=0
+  for script_name in "${SUPPORTED_SETUP_SCRIPTS[@]}"; do
+    if [[ "${SCRIPT_NAME}" == "${script_name}" ]]; then
+      script_found=1
+      break
+    fi
+  done
+
+  if [[ "${script_found}" -eq 0 ]]; then
+    echo -e "${C_RED}${BOLD_ON}This script (${SCRIPT_NAME}) is not recognized as a supported setup script.${C_RESET}"
+    echo -e "${C_RED}${BOLD_ON}Supported scripts are: ${SUPPORTED_SETUP_SCRIPTS[*]}${C_RESET}"
+    exit 1
+  fi
+}
+
+display_banner() {
+  echo -e "${C_GREEN}============================================================${C_RESET}"
+  echo -e "${C_GREEN}${BOLD_ON}Debian Express Setup v${SCRIPT_VERSION}${C_RESET}"
+  echo -e "${C_GREEN}Author: ${SCRIPT_AUTHOR}${C_RESET}"
+  echo -e "${C_GREEN}This script is intended for Debian-based systems only.${C_RESET}"
+  echo -e "${C_GREEN}============================================================${C_RESET}"
+  echo
+}
+
+detect_os() {
+  if [[ -f /etc/os-release ]]; then
+    source /etc/os-release
+    DETECTED_OS="${NAME:-Unknown}"
+    DETECTED_VERSION="${VERSION_ID:-Unknown}"
+  elif [[ -f /etc/debian_version ]]; then
+    DETECTED_OS="Debian"
+    DETECTED_VERSION="$(cat /etc/debian_version)"
+  else
+    DETECTED_OS="Unknown"
+    DETECTED_VERSION="Unknown"
+  fi
+}
+
+# confirm with user
+get_yes_no() {
+  local prompt="$1"
+  local default="${2:-}"
+
+  while true; do
+    if [[ -n "${default}" ]]; then
+      if [[ "${default}" == "y" ]]; then
+        read -rp "${prompt} [Y/n]: " response
+        response="${response,,}" # to lowercase
+        if [[ -z "${response}" || "${response}" == "y" || "${response}" == "yes" ]]; then
+          return 0
+        elif [[ "${response}" == "n" || "${response}" == "no" ]]; then
+          return 1
+        else
+          echo "Invalid input. Please enter y or n."
         fi
-      # If all else fails, try to find any interface that might be netbird
+      elif [[ "${default}" == "n" ]]; then
+        read -rp "${prompt} [y/N]: " response
+        response="${response,,}" # to lowercase
+        if [[ -z "${response}" || "${response}" == "n" || "${response}" == "no" ]]; then
+          return 1
+        elif [[ "${response}" == "y" || "${response}" == "yes" ]]; then
+          return 0
+        else
+          echo "Invalid input. Please enter y or n."
+        fi
       else
-        for iface in $(ip -o link | awk -F': ' '{print $2}' | grep -E 'netbird|nb'); do
-          if ip addr show "$iface" 2>/dev/null | grep -q "inet "; then
-            netbird_ip=$(ip addr show "$iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "Unknown")
-            break
-          fi
-        done
+        echo "Invalid default value: ${default}"
+        return 1
       fi
-      
-      echo -n "Enter your Netbird IP range (e.g., 100.92.0.0/16): "
-      read -r netbird_subnet
-      netbird_subnet=${netbird_subnet:-"100.92.0.0/16"}
-      echo
-      
-      # Save command for allowing VPN subnet in firewall for later
-      mkdir -p "$TEMP_DIR"
-      echo "# To allow traffic from the Netbird VPN subnet in UFW:" > "$TEMP_DIR/vpn_firewall.txt"
-      echo "sudo ufw allow from $netbird_subnet comment 'Netbird VPN subnet'" >> "$TEMP_DIR/vpn_firewall.txt"
-      
-      # Save command for Fail2Ban whitelist
-      echo "# To add the Netbird subnet to Fail2Ban whitelist:" >> "$TEMP_DIR/fail2ban_vpn.txt"
-      echo "sudo fail2ban-client set sshd addignoreip $netbird_subnet" >> "$TEMP_DIR/fail2ban_vpn.txt"
-      
-      echo "Netbird has been successfully configured."
-      echo
-      echo -e "Your Netbird IP: ${HIGHLIGHT}$netbird_ip${CL}"
-      echo -e "Netbird subnet: ${HIGHLIGHT}$netbird_subnet${CL}"
-      echo
-      
-      echo "VPN: Netbird" >> "$SUMMARY_FILE"
-      echo "Netbird IP: $netbird_ip" >> "$SUMMARY_FILE"
-      echo "Netbird subnet: $netbird_subnet" >> "$SUMMARY_FILE"
     else
-      msg_error "Netbird setup key not provided"
-      echo "VPN: Netbird configuration failed (no setup key)" >> "$SUMMARY_FILE"
+      read -rp "${prompt} [y/n]: " response
+      response="${response,,}" # to lowercase
+      case "${response}" in
+        y|yes) return 0 ;;
+        n|no) return 1  ;;
+        *) echo "Invalid input. Please enter y or n." ;;
+      esac
     fi
+  done
+}
+
+# requires the environment variable $1 + $2
+# Example usage: get_script_variable "SCRIPT_NAME" "value if empty" "value if not empty"
+# returns "value if empty" or "value if not empty"
+get_script_variable() {
+  local variable_name="$1"
+  local value_if_empty="$2"
+  local value_if_not_empty="$3"
+
+  # shellcheck disable=SC1083,SC2295
+  local var_value="${!variable_name}"
+
+  if [[ -z "${var_value}" ]]; then
+    echo "${value_if_empty}"
   else
-    msg_error "Netbird installation failed"
-    echo "VPN: Netbird installation failed" >> "$SUMMARY_FILE"
+    echo "${value_if_not_empty}"
   fi
 }
 
-##############################
-# 5. AUTOMATIC SECURITY UPDATES
-##############################
-
-# Function to set up automatic security updates
-setup_auto_updates() {
-  if get_yes_no "Would you like to configure automatic security updates?"; then
-    msg_info "Setting up unattended-upgrades..."
-    
-    # Install required packages
-    apt install -y unattended-upgrades apt-listchanges
-    
-    # Configure automatic updates
-    cat > /etc/apt/apt.conf.d/20auto-upgrades << EOF
-APT::Periodic::Update-Package-Lists "1";
-APT::Periodic::Unattended-Upgrade "1";
-APT::Periodic::AutocleanInterval "7";
-EOF
-    
-    # Disable automatic reboot in configuration (but don't mention it in summary)
-    sed -i "s|^Unattended-Upgrade::Automatic-Reboot \".*\";|Unattended-Upgrade::Automatic-Reboot \"false\";|" /etc/apt/apt.conf.d/50unattended-upgrades 2>/dev/null
-    if ! grep -q "Unattended-Upgrade::Automatic-Reboot" /etc/apt/apt.conf.d/50unattended-upgrades; then
-      echo 'Unattended-Upgrade::Automatic-Reboot "false";' >> /etc/apt/apt.conf.d/50unattended-upgrades
-    fi
-    
-    # Restart unattended-upgrades service
-    systemctl restart unattended-upgrades
-    
-    msg_ok "Automatic security updates configured successfully"
-    echo "Automatic security updates: Enabled" >> "$SUMMARY_FILE"
-    # Removed the reboot line from the summary
+pause_execution() {
+  if [[ $# -gt 0 ]]; then
+    read -r -p "$*"
   else
-    msg_info "Automatic security updates not configured"
-    echo "Automatic security updates: Not configured" >> "$SUMMARY_FILE"
+    read -r -p "Press Enter to continue..."
   fi
 }
 
-#########################
-# SUMMARY AND COMPLETION
-#########################
-
-# Function to display security summary
-display_security_summary() {
-  # Get server IP
-  server_ip=$(hostname -I | awk '{print $1}')
-  
-  echo
-  echo "=== Debian Express Security Summary ==="
-  echo
-  echo "System Information:"
-  echo "• Hostname: ${HIGHLIGHT}$(hostname)${CL}"
-  echo "• IP Address: ${HIGHLIGHT}$server_ip${CL}"
-  echo "• OS: ${HIGHLIGHT}$(lsb_release -ds 2>/dev/null || cat /etc/debian_version 2>/dev/null || echo "Debian-based")${CL}"
-  echo
-  
-  # Organize summary into sections
-  echo "SSH Configuration:"
-  grep -E "Root SSH|SSH keys|Public key|Password auth|SSH access" "$SUMMARY_FILE" | while IFS= read -r line; do
-    key=$(echo "$line" | cut -d':' -f1)
-    value=$(echo "$line" | cut -d':' -f2-)
-    echo "• $key: ${HIGHLIGHT}$value${CL}"
-  done
-  echo
-  
-  # Sudo Configuration
-  if grep -q "Passwordless sudo" "$SUMMARY_FILE"; then
-    echo "Sudo Configuration:"
-    grep "Passwordless sudo" "$SUMMARY_FILE" | while IFS= read -r line; do
-      key=$(echo "$line" | cut -d':' -f1)
-      value=$(echo "$line" | cut -d':' -f2-)
-      echo "• $key: ${HIGHLIGHT}$value${CL}"
-    done
-    echo
-  fi
-  
-  # Firewall Configuration
-  echo "Firewall Configuration:"
-  grep -E "^Firewall \(UFW\)" "$SUMMARY_FILE" | while IFS= read -r line; do
-    key=$(echo "$line" | cut -d':' -f1)
-    value=$(echo "$line" | cut -d':' -f2-)
-    echo "• $key: ${HIGHLIGHT}$value${CL}"
-  done
-  echo
-  
-  # Detected Services
-  echo "Detected Services:"
-  if [ -f "$TEMP_DIR/full_services.txt" ]; then
-    # Use our simplified service list if available
-    while IFS= read -r line; do
-      if [[ "$line" != *"Docker containers with exposed ports"* && "$line" != *"  - "* ]]; then
-        echo "• $line"
-      fi
-    done < "$TEMP_DIR/full_services.txt"
-  elif grep -q "Note: The following services were detected" "$SUMMARY_FILE"; then
-    # Fall back to summary file if needed
-    in_services_section=false
-    while IFS= read -r line; do
-      if [[ "$in_services_section" == true ]]; then
-        if [[ "$line" == "• Fail2Ban"* ]]; then
-          in_services_section=false
-          continue
-        fi
-        if [[ "$line" != *"Docker containers with exposed ports"* && "$line" != *"  - "* ]]; then
-          echo "$line"
-        fi
-      fi
-      if [[ "$line" == "• Note: The following services were detected"* ]]; then
-        in_services_section=true
-      fi
-    done < "$SUMMARY_FILE"
-  fi
-  echo
-  
-  # Fail2Ban Configuration
-  echo "Fail2Ban Configuration:"
-  grep -E "^Fail2Ban" "$SUMMARY_FILE" | while IFS= read -r line; do
-    key=$(echo "$line" | cut -d':' -f1)
-    value=$(echo "$line" | cut -d':' -f2-)
-    echo "• $key: ${HIGHLIGHT}$value${CL}"
-  done
-  echo
-  
-  # VPN Configuration
-  if grep -q "^VPN:" "$SUMMARY_FILE"; then
-    echo "VPN Configuration:"
-    grep -E "^VPN:|^Netbird|^Tailscale" "$SUMMARY_FILE" | while IFS= read -r line; do
-      key=$(echo "$line" | cut -d':' -f1)
-      value=$(echo "$line" | cut -d':' -f2-)
-      echo "• $key: ${HIGHLIGHT}$value${CL}"
-    done
-    echo
-  fi
-  
-  # Update Configuration
-  echo "Update Configuration:"
-  grep "Automatic security updates" "$SUMMARY_FILE" | while IFS= read -r line; do
-    key=$(echo "$line" | cut -d':' -f1)
-    value=$(echo "$line" | cut -d':' -f2-)
-    echo "• $key: ${HIGHLIGHT}$value${CL}"
-  done
-  echo
-  
-  # Add VPN firewall commands if available
-  if [ -f "$TEMP_DIR/vpn_firewall.txt" ]; then
-    echo "=== VPN Firewall Commands ==="
-    cat "$TEMP_DIR/vpn_firewall.txt"
-    echo
-  fi
-  
-  # Add Fail2Ban VPN whitelist commands if available
-  if [ -f "$TEMP_DIR/fail2ban_vpn.txt" ]; then
-    echo "=== Fail2Ban VPN Whitelist Commands ==="
-    cat "$TEMP_DIR/fail2ban_vpn.txt"
-    echo
-  fi
-  
-  # Save complete summary to file with the same improvements
-  summary_file="/root/debian-express-security-summary.txt"
-  
-  {
-    echo "=== Debian Express Security Summary ==="
-    echo
-    echo "System Information:"
-    echo "• Hostname: $(hostname)"
-    echo "• IP Address: $server_ip"
-    echo "• OS: $(lsb_release -ds 2>/dev/null || cat /etc/debian_version 2>/dev/null || echo "Debian-based")"
-    echo
-    
-    # Organized sections in the file (without colors)
-    echo "SSH Configuration:"
-    grep -E "Root SSH|SSH keys|Public key|Password auth|SSH access" "$SUMMARY_FILE" | while IFS= read -r line; do
-      echo "• $line"
-    done
-    echo
-    
-    if grep -q "Passwordless sudo" "$SUMMARY_FILE"; then
-      echo "Sudo Configuration:"
-      grep "Passwordless sudo" "$SUMMARY_FILE" | while IFS= read -r line; do
-        echo "• $line"
-      done
-      echo
-    fi
-    
-    echo "Firewall Configuration:"
-    grep -E "^Firewall \(UFW\)" "$SUMMARY_FILE" | while IFS= read -r line; do
-      echo "• $line"
-    done
-    echo
-    
-    echo "Detected Services:"
-    if [ -f "$TEMP_DIR/full_services.txt" ]; then
-      while IFS= read -r line; do
-        if [[ "$line" != *"Docker containers with exposed ports"* && "$line" != *"  - "* ]]; then
-          echo "• $line"
-        fi
-      done < "$TEMP_DIR/full_services.txt"
-    elif grep -q "Note: The following services were detected" "$SUMMARY_FILE"; then
-      in_services_section=false
-      while IFS= read -r line; do
-        if [[ "$in_services_section" == true ]]; then
-          if [[ "$line" == "• Fail2Ban"* ]]; then
-            in_services_section=false
-            continue
-          fi
-          if [[ "$line" != *"Docker containers with exposed ports"* && "$line" != *"  - "* ]]; then
-            echo "$line"
-          fi
-        fi
-        if [[ "$line" == "• Note: The following services were detected"* ]]; then
-          in_services_section=true
-        fi
-      done < "$SUMMARY_FILE"
-    fi
-    echo
-    
-    echo "Fail2Ban Configuration:"
-    grep -E "^Fail2Ban" "$SUMMARY_FILE" | while IFS= read -r line; do
-      echo "• $line"
-    done
-    echo
-    
-    if grep -q "^VPN:" "$SUMMARY_FILE"; then
-      echo "VPN Configuration:"
-      grep -E "^VPN:|^Netbird|^Tailscale" "$SUMMARY_FILE" | while IFS= read -r line; do
-        echo "• $line"
-      done
-      echo
-    fi
-    
-    echo "Update Configuration:"
-    grep "Automatic security updates" "$SUMMARY_FILE" | while IFS= read -r line; do
-      echo "• $line"
-    done
-    echo
-    
-    # Add VPN firewall commands if available
-    if [ -f "$TEMP_DIR/vpn_firewall.txt" ]; then
-      echo "=== VPN Firewall Commands ==="
-      cat "$TEMP_DIR/vpn_firewall.txt"
-      echo
-    fi
-    
-    # Add Fail2Ban VPN whitelist commands if available
-    if [ -f "$TEMP_DIR/fail2ban_vpn.txt" ]; then
-      echo "=== Fail2Ban VPN Whitelist Commands ==="
-      cat "$TEMP_DIR/fail2ban_vpn.txt"
-      echo
-    fi
-  } > "$summary_file"
-  
-  chmod 600 "$summary_file"
-  
-  echo "Complete security summary saved to: $summary_file"
-  echo
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
 }
 
-# Function to clean up and complete setup
-finalize_security_setup() {
-  msg_info "Finalizing security setup..."
-  
-  # System cleanup
-  apt autoremove -y
-  apt clean
-  
-  # Generate and display the summary
-  display_security_summary
-  
-  msg_ok "Debian Express Security setup completed successfully!"
-  echo
-  echo "Your server has been secured according to your preferences."
-  echo "Please review the summary information provided."
-  echo
-  echo "For security changes to fully apply, it's recommended to reboot your server."
-  echo
-  
-  # Clean up state file to ensure fresh detection on next run
-  if [ -f "$STATE_FILE" ]; then
-    rm -f "$STATE_FILE"
-    msg_ok "State file cleaned up for fresh detection on next run"
+failed_command_status() {
+  local cmd="$*"
+  ${cmd}
+  local status=$?
+  if [[ $status -ne 0 ]]; then
+    echo -e "${C_RED}${BOLD_ON}Command '${cmd}' failed with status ${status}.${C_RESET}"
+    exit $status
   fi
-  
-  if get_yes_no "Would you like to reboot now?"; then
-    echo "Rebooting system in 5 seconds..."
-    sleep 5
-    reboot
+  return $status
+}
+
+system_update() {
+  apt-get update -y && apt-get upgrade -y
+}
+
+apt_clean() {
+  apt-get autoremove -y
+  apt-get autoclean -y
+  apt-get clean -y
+}
+
+reboot_required() {
+  # check if /var/run/reboot-required exists
+  if [[ -f /var/run/reboot-required ]]; then
+    return 0
+  fi
+  return 1
+}
+
+prompt_reboot_if_required() {
+  if reboot_required; then
+    echo -e "${C_YELLOW}${BOLD_ON}A reboot is required to apply changes.${C_RESET}"
+    if get_yes_no "Reboot now?"; then
+      echo -e "${C_GREEN}${BOLD_ON}Rebooting...${C_RESET}"
+      reboot
+    else
+      echo -e "${C_YELLOW}${BOLD_ON}Reboot was postponed. System changes may not take full effect until the next reboot.${C_RESET}"
+    fi
+  fi
+}
+
+configure_swap() {
+  local swap_size="$1"
+
+  if [[ -z "${swap_size}" ]]; then
+    echo -e "${C_RED}${BOLD_ON}Swap size not specified. Skipping swap configuration.${C_RESET}"
+    return
+  fi
+
+  # check if swap is already configured
+  if swapon --show | grep -q "partition"; then
+    echo -e "${C_YELLOW}${BOLD_ON}Swap partition already configured. Skipping swap file creation.${C_RESET}"
+    return
+  fi
+
+  if swapon --show | grep -q "file"; then
+    echo -e "${C_YELLOW}${BOLD_ON}Swap file already configured. Skipping swap file creation.${C_RESET}"
+    return
+  fi
+
+  echo -e "${C_GREEN}${BOLD_ON}Configuring swap file of size ${swap_size}...${C_RESET}"
+  fallocate -l "${swap_size}" /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+
+  if ! grep -q '^/swapfile' /etc/fstab; then
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  fi
+
+  echo -e "${C_GREEN}${BOLD_ON}Swap file created and enabled.${C_RESET}"
+}
+
+create_user() {
+  local username="$1"
+  local password="$2"
+  local shell="/bin/bash"
+
+  # Check if user already exists
+  if id -u "${username}" >/dev/null 2>&1; then
+    echo -e "${C_YELLOW}${BOLD_ON}User '${username}' already exists. Skipping creation.${C_RESET}"
   else
-    echo "Please remember to reboot your system manually when convenient."
+    # create user with password
+    useradd -m -s "${shell}" "${username}"
+    echo "${username}:${password}" | chpasswd
+    echo -e "${C_GREEN}${BOLD_ON}User '${username}' created.${C_RESET}"
   fi
 }
 
-# Main function to orchestrate the security setup process
+create_sudo_user() {
+  local username="$1"
+  local password="$2"
+  local shell="/bin/bash"
+
+  create_user "${username}" "${password}"
+  usermod -aG sudo "${username}"
+  echo -e "${C_GREEN}${BOLD_ON}User '${username}' added to sudo group.${C_RESET}"
+}
+
+lock_user() {
+  local username="$1"
+  usermod --lock "${username}"
+  echo -e "${C_GREEN}${BOLD_ON}User '${username}' has been locked.${C_RESET}"
+}
+
+disable_root_ssh_login() {
+  local ssh_config="/etc/ssh/sshd_config"
+
+  if grep -qE '^PermitRootLogin\s+yes' "${ssh_config}"; then
+    sed -i 's/^PermitRootLogin\s\+yes/PermitRootLogin no/g' "${ssh_config}"
+    echo -e "${C_GREEN}${BOLD_ON}Disabled root SSH login.${C_RESET}"
+    systemctl restart ssh
+  else
+    echo -e "${C_YELLOW}${BOLD_ON}Root SSH login is already disabled or not found.${C_RESET}"
+  fi
+}
+
+disable_password_authentication() {
+  local ssh_config="/etc/ssh/sshd_config"
+
+  if grep -qE '^PasswordAuthentication\s+yes' "${ssh_config}"; then
+    sed -i 's/^PasswordAuthentication\s\+yes/PasswordAuthentication no/g' "${ssh_config}"
+    echo -e "${C_GREEN}${BOLD_ON}Disabled password authentication in SSH.${C_RESET}"
+    systemctl restart ssh
+  else
+    echo -e "${C_YELLOW}${BOLD_ON}Password authentication is already disabled or not found.${C_RESET}"
+  fi
+}
+
+enable_ufw() {
+  if ! command_exists ufw; then
+    apt-get install -y ufw
+  fi
+
+  if ! ufw status | grep -q 'Status: active'; then
+    ufw --force enable
+    echo -e "${C_GREEN}${BOLD_ON}UFW firewall enabled.${C_RESET}"
+  else
+    echo -e "${C_YELLOW}${BOLD_ON}UFW is already enabled.${C_RESET}"
+  fi
+}
+
+configure_ufw_ssh() {
+  ufw allow ssh
+  echo -e "${C_GREEN}${BOLD_ON}UFW: Allowed SSH traffic.${C_RESET}"
+}
+
+configure_ufw_http_https() {
+  ufw allow http
+  ufw allow https
+  echo -e "${C_GREEN}${BOLD_ON}UFW: Allowed HTTP and HTTPS traffic.${C_RESET}"
+}
+
+configure_ufw_port() {
+  local port="$1"
+  ufw allow "${port}"
+  echo -e "${C_GREEN}${BOLD_ON}UFW: Allowed port ${port}.${C_RESET}"
+}
+
+install_fail2ban() {
+  if ! command_exists fail2ban-server; then
+    apt-get install -y fail2ban
+    systemctl enable fail2ban
+    systemctl start fail2ban
+    echo -e "${C_GREEN}${BOLD_ON}Fail2ban installed and enabled.${C_RESET}"
+  else
+    echo -e "${C_YELLOW}${BOLD_ON}Fail2ban is already installed.${C_RESET}"
+  fi
+}
+
+configure_fail2ban_jail() {
+  local jail_local="/etc/fail2ban/jail.local"
+  if [[ ! -f "${jail_local}" ]]; then
+    cp /etc/fail2ban/jail.conf "${jail_local}"
+    echo -e "${C_GREEN}${BOLD_ON}Created jail.local from jail.conf.${C_RESET}"
+  else
+    echo -e "${C_YELLOW}${BOLD_ON}jail.local already exists, not overwritten.${C_RESET}"
+  fi
+}
+
+install_logwatch() {
+  if ! command_exists logwatch; then
+    apt-get install -y logwatch
+    echo -e "${C_GREEN}${BOLD_ON}Logwatch installed.${C_RESET}"
+  else
+    echo -e "${C_YELLOW}${BOLD_ON}Logwatch is already installed.${C_RESET}"
+  fi
+}
+
+configure_logwatch() {
+  local logwatch_conf="/usr/share/logwatch/default.conf/logwatch.conf"
+  if [[ -f "${logwatch_conf}" ]]; then
+    # default mail "root"
+    # we could do sed or manual config
+    echo -e "${C_GREEN}${BOLD_ON}Logwatch configuration file: ${logwatch_conf}${C_RESET}"
+  else
+    echo -e "${C_YELLOW}${BOLD_ON}Logwatch configuration not found at ${logwatch_conf}${C_RESET}"
+  fi
+}
+
+install_rkhunter() {
+  if ! command_exists rkhunter; then
+    apt-get install -y rkhunter
+    echo -e "${C_GREEN}${BOLD_ON}rkhunter installed.${C_RESET}"
+  else
+    echo -e "${C_YELLOW}${BOLD_ON}rkhunter is already installed.${C_RESET}"
+  fi
+}
+
+update_rkhunter() {
+  if command_exists rkhunter; then
+    rkhunter --update
+    rkhunter --propupd
+    echo -e "${C_GREEN}${BOLD_ON}rkhunter updated and property database updated.${C_RESET}"
+  else
+    echo -e "${C_RED}${BOLD_ON}rkhunter is not installed. Skipping update.${C_RESET}"
+  fi
+}
+
+check_rkhunter() {
+  if command_exists rkhunter; then
+    rkhunter --check --sk
+  else
+    echo -e "${C_RED}${BOLD_ON}rkhunter is not installed. Skipping check.${C_RESET}"
+  fi
+}
+
+setup_ssh_key_auth() {
+  local username="$1"
+  local public_key="$2"
+  local ssh_dir="/home/${username}/.ssh"
+  local authorized_keys="${ssh_dir}/authorized_keys"
+
+  if [[ -z "${username}" ]] || [[ -z "${public_key}" ]]; then
+    echo -e "${C_RED}${BOLD_ON}Username or public key not provided. Skipping SSH key setup.${C_RESET}"
+    return
+  fi
+
+  if [[ ! -d "${ssh_dir}" ]]; then
+    mkdir -p "${ssh_dir}"
+    chown "${username}:${username}" "${ssh_dir}"
+    chmod 700 "${ssh_dir}"
+  fi
+
+  if [[ ! -f "${authorized_keys}" ]]; then
+    touch "${authorized_keys}"
+    chown "${username}:${username}" "${authorized_keys}"
+    chmod 600 "${authorized_keys}"
+  fi
+
+  if ! grep -q "${public_key}" "${authorized_keys}"; then
+    echo "${public_key}" >> "${authorized_keys}"
+    echo -e "${C_GREEN}${BOLD_ON}Added public key to ${authorized_keys}.${C_RESET}"
+  else
+    echo -e "${C_YELLOW}${BOLD_ON}Public key already present in ${authorized_keys}.${C_RESET}"
+  fi
+}
+
+setup_hostname() {
+  local new_hostname="$1"
+  if [[ -z "${new_hostname}" ]]; then
+    echo -e "${C_RED}${BOLD_ON}Hostname not provided. Skipping hostname setup.${C_RESET}"
+    return
+  fi
+
+  local current_hostname
+  current_hostname=$(hostname)
+
+  if [[ "${new_hostname}" == "${current_hostname}" ]]; then
+    echo -e "${C_YELLOW}${BOLD_ON}Hostname is already '${new_hostname}'. Skipping.${C_RESET}"
+    return
+  fi
+
+  hostnamectl set-hostname "${new_hostname}"
+  echo -e "${C_GREEN}${BOLD_ON}Hostname changed from '${current_hostname}' to '${new_hostname}'.${C_RESET}"
+
+  # Update /etc/hosts
+  if ! grep -q "${new_hostname}" /etc/hosts; then
+    echo "127.0.1.1  ${new_hostname}" >> /etc/hosts
+    echo -e "${C_GREEN}${BOLD_ON}Added '${new_hostname}' to /etc/hosts.${C_RESET}"
+  fi
+}
+
+update_locale() {
+  local new_locale="$1"
+  if [[ -z "${new_locale}" ]]; then
+    echo -e "${C_RED}${BOLD_ON}Locale not provided. Skipping locale update.${C_RESET}"
+    return
+  fi
+
+  echo -e "${C_GREEN}${BOLD_ON}Updating locale to ${new_locale}...${C_RESET}"
+  sed -i "s/^# *${new_locale}/${new_locale}/" /etc/locale.gen
+  locale-gen
+  update-locale LANG="${new_locale}"
+  echo -e "${C_GREEN}${BOLD_ON}Locale updated to ${new_locale}.${C_RESET}"
+}
+
+update_timezone() {
+  local new_timezone="$1"
+  if [[ -z "${new_timezone}" ]]; then
+    echo -e "${C_RED}${BOLD_ON}Timezone not provided. Skipping timezone update.${C_RESET}"
+    return
+  fi
+
+  echo -e "${C_GREEN}${BOLD_ON}Updating timezone to ${new_timezone}...${C_RESET}"
+  timedatectl set-timezone "${new_timezone}"
+  echo -e "${C_GREEN}${BOLD_ON}Timezone updated to ${new_timezone}.${C_RESET}"
+}
+
+install_package_list() {
+  local package_list=("$@")
+  if [[ ${#package_list[@]} -eq 0 ]]; then
+    echo -e "${C_RED}${BOLD_ON}No packages specified to install.${C_RESET}"
+    return
+  fi
+
+  echo -e "${C_GREEN}${BOLD_ON}Installing packages: ${package_list[*]}...${C_RESET}"
+  apt-get install -y "${package_list[@]}"
+}
+
+remove_package_list() {
+  local package_list=("$@")
+  if [[ ${#package_list[@]} -eq 0 ]]; then
+    echo -e "${C_RED}${BOLD_ON}No packages specified to remove.${C_RESET}"
+    return
+  fi
+
+  echo -e "${C_GREEN}${BOLD_ON}Removing packages: ${package_list[*]}...${C_RESET}"
+  apt-get remove -y "${package_list[@]}"
+  apt-get autoremove -y
+}
+
+install_docker() {
+  if command_exists docker; then
+    echo -e "${C_YELLOW}${BOLD_ON}Docker is already installed.${C_RESET}"
+    return
+  fi
+
+  echo -e "${C_GREEN}${BOLD_ON}Installing Docker...${C_RESET}"
+  apt-get update -y
+  apt-get install -y \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release
+
+  curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+  echo \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian \
+    $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+  apt-get update -y
+  apt-get install -y docker-ce docker-ce-cli containerd.io
+  systemctl enable docker
+  systemctl start docker
+  echo -e "${C_GREEN}${BOLD_ON}Docker installed and started.${C_RESET}"
+}
+
+install_docker_compose() {
+  if command_exists docker-compose; then
+    echo -e "${C_YELLOW}${BOLD_ON}docker-compose is already installed.${C_RESET}"
+    return
+  fi
+
+  echo -e "${C_GREEN}${BOLD_ON}Installing docker-compose...${C_RESET}"
+  local latest_version
+  latest_version="$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep tag_name | cut -d '"' -f 4)"
+  curl -L "https://github.com/docker/compose/releases/download/${latest_version}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+  chmod +x /usr/local/bin/docker-compose
+  echo -e "${C_GREEN}${BOLD_ON}docker-compose installed.${C_RESET}"
+}
+
+install_k3s() {
+  if command_exists k3s; then
+    echo -e "${C_YELLOW}${BOLD_ON}k3s is already installed.${C_RESET}"
+    return
+  fi
+
+  echo -e "${C_GREEN}${BOLD_ON}Installing k3s...${C_RESET}"
+  curl -sfL https://get.k3s.io | sh -
+  echo -e "${C_GREEN}${BOLD_ON}k3s installed.${C_RESET}"
+}
+
+#################################
+# Version check for environment
+#################################
+environment_version() {
+  echo "${SCRIPT_VERSION}"
+}
+
+################################################################################
+#                   END: debian-express-environment.sh
+################################################################################
+
+
+################################################################################
+#                   START: debian-express-secure.sh
+################################################################################
+# (Below is the original 'debian-express-secure.sh' content, with the
+#  `source debian-express-environment.sh` line removed/commented out.)
+################################################################################
+
+# --------------------------------------------------------------------------------
+# Title         : Debian Express Setup - Secure
+# Author        : eviip
+# Date          : 2023-06-17
+# Version       : 2.3.2
+# Description   : Secure setup script for Debian-based systems
+#                (firewall, fail2ban, basic hardening, etc.)
+# Tested on     : Debian 10, Debian 11
+# --------------------------------------------------------------------------------
+# shellcheck disable=SC1091,SC2154,SC2162,SC2034
+
+# Removed or commented out:
+# source "$(dirname "$0")/debian-express-environment.sh"
+
+# set -e -u -o pipefail
+
+# Usage:
+#   sudo bash debian-express-secure.sh
+
+#################################
+# Secure Setup Main
+#################################
+
 main() {
   check_root
   check_debian_based
   display_banner
   detect_os
   check_setup_script
-  
-  # Confirmation to proceed
-  if ! get_yes_no "This script will help you secure your Debian-based server. Do you want to proceed?"; then
+
+  # Confirm if user wants to proceed
+  echo -e "${C_GREEN}This script will apply basic security measures for Debian-based systems.${C_RESET}"
+  if ! get_yes_no "Do you want to continue?" "y"; then
     echo "Setup cancelled. No changes were made."
-    exit 0
-  fi
-  
-  # Detect installed services
-  detect_services
-  
-  # SSH hardening
-  configure_ssh_security
-  
-  # Firewall configuration
-  configure_firewall
-  
-  # Install and configure Fail2Ban
-  setup_fail2ban
-  
-  # VPN setup
-  setup_vpn
-  
-  # Automatic security updates
-  setup_auto_updates
-  
-  # Finalize setup
-  finalize_security_setup
-}
-
-# Run the main function
-main "$@"#!/usr/bin/env bash
-
-# Debian Express Secure
-# Security & Network Configuration Script
-# License: MIT
-# Description: Secures and configures networking for Debian-based servers
-
-# Define colors and formatting
-RD="\033[01;31m"
-GN="\033[0;32m"
-YW="\033[33m"
-BL="\033[0;34m"
-CL="\033[m"
-CM="${GN}✓${CL}"
-CROSS="${RD}✗${CL}"
-INFO="${YW}→${CL}"
-HIGHLIGHT="${BL}"
-
-# Create a temporary directory for storing installation states
-TEMP_DIR="/tmp/debian-express"
-STATE_FILE="$TEMP_DIR/installed-services.txt"
-SUMMARY_FILE="$TEMP_DIR/security-summary.txt"
-mkdir -p "$TEMP_DIR"
-touch "$STATE_FILE"
-touch "$SUMMARY_FILE"
-
-# Function to display success messages
-msg_ok() {
-  echo -e "${CM} $1"
-  echo
-}
-
-# Function to display info messages
-msg_info() {
-  echo -e "${INFO} $1"
-  echo
-}
-
-# Function to display error messages
-msg_error() {
-  echo -e "${CROSS} $1"
-  echo
-}
-
-# Function to get yes/no input from user
-get_yes_no() {
-  local prompt="$1"
-  local response
-  
-  while true; do
-    echo -e -n "${prompt} [${HIGHLIGHT}y${CL}/${HIGHLIGHT}n${CL}]: "
-    read -r response
-    case $response in
-      [Yy]* ) echo; return 0 ;;
-      [Nn]* ) echo; return 1 ;;
-      * ) echo "Please answer yes or no." ;;
-    esac
-  done
-}
-
-# Function to check for root privileges
-check_root() {
-  if [[ "$EUID" -ne 0 ]]; then
-    msg_error "This script must be run as root"
     exit 1
   fi
+
+  # Start with a system update
+  echo -e "${C_GREEN}${BOLD_ON}Updating system packages...${C_RESET}"
+  system_update
+
+  # Installing essential security packages
+  echo -e "${C_GREEN}${BOLD_ON}Installing essential packages...${C_RESET}"
+  install_package_list ufw fail2ban logwatch rkhunter
+
+  # Configure UFW
+  echo -e "${C_GREEN}${BOLD_ON}Configuring UFW...${C_RESET}"
+  enable_ufw
+  configure_ufw_ssh
+  configure_ufw_http_https
+
+  # Configure fail2ban
+  echo -e "${C_GREEN}${BOLD_ON}Configuring fail2ban...${C_RESET}"
+  install_fail2ban
+  configure_fail2ban_jail
+  systemctl restart fail2ban
+
+  # Disable root SSH login
+  echo -e "${C_GREEN}${BOLD_ON}Disabling root SSH login...${C_RESET}"
+  disable_root_ssh_login
+
+  # Optionally disable password authentication
+  if get_yes_no "Disable password authentication in SSH? (Requires SSH key for login)"; then
+    disable_password_authentication
+  fi
+
+  # rkhunter update
+  echo -e "${C_GREEN}${BOLD_ON}Updating rkhunter...${C_RESET}"
+  update_rkhunter
+
+  # Logwatch basic configuration
+  echo -e "${C_GREEN}${BOLD_ON}Configuring logwatch...${C_RESET}"
+  configure_logwatch
+
+  # Final cleaning
+  echo -e "${C_GREEN}${BOLD_ON}Cleaning up packages...${C_RESET}"
+  apt_clean
+
+  # Done
+  echo -e "${C_GREEN}${BOLD_ON}Debian Express Secure Setup is complete.${C_RESET}"
+  prompt_reboot_if_required
 }
 
-# Function to check if it's a Debian-based system
-check_debian_based() {
-  if [ ! -f /etc/debian_version ]; then
-    msg_error "This script is designed for Debian-based systems only!"
-    exit 1
-  fi
-}
-
-# Detect OS version and display it
-detect_os() {
-  if [ -f /etc/debian_version ]; then
-    OS_VERSION=$(cat /etc/debian_version)
-    if [ -f /etc/lsb-release ]; then
-      OS_NAME="Ubuntu"
-      OS_PRETTY=$(lsb_release -ds)
-    else
-      OS_NAME="Debian"
-      OS_PRETTY="Debian ${OS_VERSION}"
-    fi
-    echo -e "Detected system: ${GN}${OS_PRETTY}${CL}\n"
-    return 0
-  else
-    return 1  # Not a Debian-based system
-  fi
-}
-
-# Function to display script banner
-display_banner() {
-  clear
-  cat <<"EOF"
- ____       _     _                _____                              
-|  _ \  ___| |__ (_) __ _ _ __   | ____|_  ___ __  _ __ ___  ___ ___ 
-| | | |/ _ \ '_ \| |/ _` | '_ \  |  _| \ \/ / '_ \| '__/ _ \/ __/ __|
-| |_| |  __/ |_) | | (_| | | | | | |___ >  <| |_) | | |  __/\__ \__ \
-|____/ \___|_.__/|_|\__,_|_| |_| |_____/_/\_\ .__/|_|  \___||___/___/
-                                            |_|                      
-  ____                            
- / ___|  ___  ___ _   _ _ __ ___ 
- \___ \ / _ \/ __| | | | '__/ _ \
-  ___) |  __/ (__| |_| | | |  __/
- |____/ \___|\___|\__,_|_|  \___|
-                                 
-EOF
-
-  echo -e "\n${BL}Security & Network Configuration${CL}\n"
-}
-
-# Function to check if setup script was run
-check_setup_script() {
-  if [ ! -f "$STATE_FILE" ]; then
-    if get_yes_no "It appears that debian-express-setup.sh has not been run yet or no services were installed. It's recommended to run the setup script first. Continue anyway?"; then
-      return 0
-    else
-      echo "Please run debian-express-setup.sh first."
-      exit 0
-    fi
-  fi
-}
-
-# Function to detect services from state file and running processes
-detect_services() {
-  msg_info "Detecting installed services..."
-  
-  # Create a clean temporary file for processed services
-  TMP_SERVICES_FILE=$(mktemp)
-  DETECTED_SERVICES_LIST=""
-  FULL_SERVICES_LIST=""
-  
-  # Track services we've already seen to prevent duplicates
-  declare -A seen_services
-  
-  # Read from the state file created by the setup script (if it exists)
-  if [ -f "$STATE_FILE" ]; then
-    while IFS=: read -r service port; do
-      if [ -n "$service" ] && [ -n "$port" ]; then
-        # Skip if we've seen this service:port combination already
-        service_key="${service}:${port}"
-        if [ -n "${seen_services[$service_key]}" ]; then
-          continue
-        fi
-    fi
-    
-    # Show UFW rules summary
-    echo "Current firewall configuration:"
-    echo
-    ufw status verbose
-    echo
-  else
-    msg_info "UFW configuration skipped"
-    echo "Firewall (UFW): Not configured" >> "$SUMMARY_FILE"
-    
-    # Add detected services to summary for cloud firewall reference
-    if [ -n "$DETECTED_SERVICES_LIST" ]; then
-      echo "Note: The following services were detected. Please ensure your cloud firewall allows these ports:" >> "$SUMMARY_FILE"
-      echo -e "$DETECTED_SERVICES_LIST" >> "$SUMMARY_FILE"
-    fi
-  fi
-}
-        
-        seen_services["$service_key"]=1
-        echo "$service:$port" >> "$TMP_SERVICES_FILE"
-        
-        # Improve display for Docker API
-        if [ "$service" = "docker" ] && [ "$port" = "2375" ]; then
-          DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Docker API: Port ${HIGHLIGHT}${port}${CL} (unencrypted remote access)\n"
-        else
-          DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• ${service^}: Port ${HIGHLIGHT}${port}${CL}\n"
-        fi
-      fi
-    done < "$STATE_FILE"
-  fi
-  
-  # Detect Docker and Docker API configuration
-  if command -v docker >/dev/null && systemctl is-active --quiet docker; then
-    # Check if Docker API is exposed
-    if [ -f /etc/docker/daemon.json ]; then
-      if grep -q '"hosts"' /etc/docker/daemon.json; then
-        if grep -q "tcp://0.0.0.0:2375" /etc/docker/daemon.json; then
-          service_key="docker:2375"
-          if [ -z "${seen_services[$service_key]}" ]; then
-            seen_services["$service_key"]=1
-            echo "docker:2375" >> "$TMP_SERVICES_FILE"
-            DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Docker API: Port ${HIGHLIGHT}2375${CL} (unencrypted remote access)\n"
-          fi
-        fi
-      fi
-    fi
-    
-    # Check systemd Docker service for exposed API
-    if systemctl cat docker.service 2>/dev/null | grep -q -- "-H tcp://0.0.0.0:2375"; then
-      service_key="docker:2375"
-      if [ -z "${seen_services[$service_key]}" ]; then
-        seen_services["$service_key"]=1
-        echo "docker:2375" >> "$TMP_SERVICES_FILE"
-        DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Docker API: Port ${HIGHLIGHT}2375${CL} (unencrypted remote access)\n"
-      fi
-    fi
-    
-    # We no longer display "Docker: Running" in the simplified output
-    # But we do keep it for the firewall rules
-    service_key="docker:N/A"
-    if [ -z "${seen_services[$service_key]}" ]; then
-      seen_services["$service_key"]=1
-      echo "docker:N/A" >> "$TMP_SERVICES_FILE"
-      FULL_SERVICES_LIST="${FULL_SERVICES_LIST}• Docker: Running${CL}\n"
-    fi
-    
-    # Detect Docker containers with exposed ports but don't display in the main list
-    container_info=$(docker ps --format "{{.Names}}|{{.Ports}}" 2>/dev/null | grep -v "^$" | sort | uniq)
-    if [ -n "$container_info" ]; then
-      FULL_SERVICES_LIST="${FULL_SERVICES_LIST}• Docker containers with exposed ports:\n"
-      
-      # Process each container and detect known services for direct display
-      while IFS="|" read -r container_name ports; do
-        # Add container details to full list but not simplified list
-        formatted_ports=$(echo "$ports" | tr -s ' ' | sed 's/,/,\n    /g')
-        FULL_SERVICES_LIST="${FULL_SERVICES_LIST}  - $container_name: $formatted_ports\n"
-        
-        # Check for known containers and their ports - these go in the simplified list
-        if echo "$container_name" | grep -q "dockge"; then
-          # Extract Dockge port(s)
-          dockge_ports=$(echo "$ports" | grep -o "[0-9]\+->5001/tcp" | cut -d'-' -f1 | tr -d ':' | tr -d '>')
-          for port in $dockge_ports; do
-            service_key="dockge:$port"
-            if [ -z "${seen_services[$service_key]}" ]; then
-              seen_services["$service_key"]=1
-              echo "dockge:$port" >> "$TMP_SERVICES_FILE"
-              DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Dockge: Port ${HIGHLIGHT}${port}${CL}\n"
-            fi
-          done
-        fi
-        
-        # For Traefik, only display the ports it's running on
-        if echo "$container_name" | grep -q "traefik"; then
-          # Extract Traefik port(s)
-          http_port=$(echo "$ports" | grep -o "[0-9]\+->80/tcp" | cut -d'-' -f1 | tr -d ':' | tr -d '>')
-          https_port=$(echo "$ports" | grep -o "[0-9]\+->443/tcp" | cut -d'-' -f1 | tr -d ':' | tr -d '>')
-          
-          if [ -n "$http_port" ] || [ -n "$https_port" ]; then
-            traefik_ports=""
-            [ -n "$http_port" ] && traefik_ports="$http_port"
-            [ -n "$https_port" ] && traefik_ports="${traefik_ports:+$traefik_ports,}$https_port"
-            
-            service_key="traefik:$traefik_ports"
-            if [ -z "${seen_services[$service_key]}" ]; then
-              seen_services["$service_key"]=1
-              echo "traefik:$traefik_ports" >> "$TMP_SERVICES_FILE"
-              DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Traefik: Ports ${HIGHLIGHT}${traefik_ports}${CL}\n"
-            fi
-          fi
-        fi
-      done <<< "$container_info"
-    fi
-  fi
-  
-  # Add system-detected services only if not already in our list
-  
-  # Webmin
-  if (systemctl is-active --quiet webmin || [ -f /etc/webmin/miniserv.conf ]); then
-    webmin_port=$(grep "^port=" /etc/webmin/miniserv.conf 2>/dev/null | cut -d= -f2)
-    webmin_port=${webmin_port:-10000}  # Default to 10000 if not found
-    service_key="webmin:$webmin_port"
-    if [ -z "${seen_services[$service_key]}" ]; then
-      seen_services["$service_key"]=1
-      echo "webmin:$webmin_port" >> "$TMP_SERVICES_FILE"
-      DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Webmin: Port ${HIGHLIGHT}${webmin_port}${CL}\n"
-    fi
-  fi
-  
-  # Nginx
-  if systemctl is-active --quiet nginx; then
-    service_key="nginx:80,443"
-    if [ -z "${seen_services[$service_key]}" ]; then
-      seen_services["$service_key"]=1
-      echo "nginx:80,443" >> "$TMP_SERVICES_FILE"
-      DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Nginx: Ports ${HIGHLIGHT}80,443${CL}\n"
-    fi
-  fi
-  
-  # Apache
-  if systemctl is-active --quiet apache2; then
-    service_key="apache2:80,443"
-    if [ -z "${seen_services[$service_key]}" ]; then
-      seen_services["$service_key"]=1
-      echo "apache2:80,443" >> "$TMP_SERVICES_FILE"
-      DETECTED_SERVICES_LIST="${DETECTED_SERVICES_LIST}• Apache: Ports ${HIGHLIGHT}80,443${CL}\n"
-    fi
-  fi
-  
-  # Load detected services into global associative array for firewall rules
-  unset DETECTED_SERVICES
-  declare -g -A DETECTED_SERVICES
-  
-  if [ -f "$TMP_SERVICES_FILE" ]; then
-    while IFS=: read -r service port; do
-      if [ -n "$service" ] && [ -n "$port" ]; then
-        DETECTED_SERVICES["$service"]="$port"
-      fi
-    done < "$TMP_SERVICES_FILE"
-    
-    # Clean up temp file
-    rm -f "$TMP_SERVICES_FILE"
-  fi
-  
-  # Save full service list for the summary file
-  FULL_SERVICES_INFO="$DETECTED_SERVICES_LIST"
-  if [ -n "$FULL_SERVICES_LIST" ]; then
-    FULL_SERVICES_INFO="$FULL_SERVICES_INFO\nDetailed container information:\n$FULL_SERVICES_LIST"
-  fi
-  
-  # If we found services, show only the simplified list
-  if [ -n "$DETECTED_SERVICES_LIST" ]; then
-    echo "Detected installed services:"
-    echo -e "$DETECTED_SERVICES_LIST"
-    
-    # Save full list to a file for reference in the summary
-    echo -e "$FULL_SERVICES_INFO" > "$TEMP_DIR/full_services.txt"
-  else
-    echo "No services detected."
-  fi
-}
-
-###################
-# 1. SSH HARDENING
-###################
-
-# Function to configure SSH and security settings
-configure_ssh_security() {
-  msg_info "Configuring SSH and security settings..."
-  
-  # Check if SSH is installed
-  if ! command -v ssh > /dev/null; then
-    msg_info "Installing SSH server..."
-    apt install -y openssh-server
-  fi
-  
-  # Backup existing configuration
-  cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup.$(date +%F)
-  
-  # Create directory for custom SSH config
-  mkdir -p /etc/ssh/sshd_config.d
-  
-  # Step 1: Check for non-root users before disabling root login
-  existing_users=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd | sort)
-  current_user=$(whoami)
-  
-  if [ "$current_user" = "root" ] && [ -z "$existing_users" ]; then
-    msg_error "No non-root users detected. Creating a non-root user is required before disabling root login."
-    echo "Would you like to create a non-root user with sudo privileges now?"
-    if get_yes_no "Create a non-root sudo user?"; then
-      echo -n "Enter username for new sudo user: "
-      read -r new_username
-      echo
-      
-      if [ -z "$new_username" ]; then
-        msg_error "No username provided. Keeping root login enabled."
-      else
-        adduser "$new_username"
-        usermod -aG sudo "$new_username"
-        apt install -y sudo  # Ensure sudo is installed
-        msg_ok "User $new_username created with sudo privileges"
-        existing_users="$new_username"
-      fi
-    else
-      msg_info "Keeping root login enabled. It's recommended to create a non-root user before disabling root login."
-    fi
-  fi
-  
-  # Now check if we can safely disable root login
-  if [ "$current_user" != "root" ] || [ -n "$existing_users" ]; then
-    if get_yes_no "Disable root SSH login? (Recommended for security)"; then
-      echo "PermitRootLogin no" > /etc/ssh/sshd_config.d/50-security.conf
-      msg_ok "Root SSH login disabled"
-      echo "Root SSH login: Disabled" >> "$SUMMARY_FILE"
-    else
-      msg_info "Root SSH login remains enabled"
-      echo "Root SSH login: Enabled" >> "$SUMMARY_FILE"
-    fi
-  fi
-  
-  # Step 2: SSH key setup
-  echo "Checking for existing SSH keys..."
-  
-  has_ssh_keys=false
-  for user in $existing_users; do
-    user_home=$(eval echo ~${user})
-    if [ -f "${user_home}/.ssh/authorized_keys" ] && [ -s "${user_home}/.ssh/authorized_keys" ]; then
-      has_ssh_keys=true
-      msg_ok "SSH keys found for user: $user"
-    fi
-  done
-  
-  if [ "$has_ssh_keys" = false ]; then
-    msg_info "No SSH keys detected for any users"
-    
-    if get_yes_no "Would you like to set up SSH key authentication? (Recommended)"; then
-      while true; do
-        setup_ssh_keys
-        
-        # Check if keys were setup successfully
-        for user in $existing_users; do
-          user_home=$(eval echo ~${user})
-          if [ -f "${user_home}/.ssh/authorized_keys" ] && [ -s "${user_home}/.ssh/authorized_keys" ]; then
-            has_ssh_keys=true
-            msg_ok "SSH keys verified for user: $user"
-            echo "SSH keys: Configured for user $user" >> "$SUMMARY_FILE"
-            break
-          fi
-        done
-        
-        if [ "$has_ssh_keys" = true ]; then
-          break
-        else
-          if get_yes_no "SSH keys not detected. Would you like to try again?"; then
-            continue
-          else
-            msg_info "Skipping SSH key setup"
-            echo "SSH keys: Not configured" >> "$SUMMARY_FILE"
-            break
-          fi
-        fi
-      done
-    else
-      echo "SSH keys: Not configured" >> "$SUMMARY_FILE"
-    fi
-  else
-    echo "SSH keys: Already configured" >> "$SUMMARY_FILE"
-  fi
-  
-  # Step 3: Enable public key authentication
-  echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config.d/50-security.conf
-  msg_ok "Public key authentication enabled"
-  echo "Public key authentication: Enabled" >> "$SUMMARY_FILE"
-  
-  # Step 4: Disable password authentication (only if SSH keys are set up)
-  if [ "$has_ssh_keys" = true ]; then
-    if get_yes_no "SSH keys detected. Would you like to disable password authentication? (Recommended when using SSH keys)"; then
-      echo "PasswordAuthentication no" >> /etc/ssh/sshd_config.d/50-security.conf
-      msg_ok "Password authentication disabled"
-      echo "Password authentication: Disabled" >> "$SUMMARY_FILE"
-    else
-      msg_info "Password authentication remains enabled"
-      echo "Password authentication: Enabled" >> "$SUMMARY_FILE"
-    fi
-  else
-    msg_info "Password authentication remains enabled (SSH keys not detected)"
-    echo "Password authentication: Enabled" >> "$SUMMARY_FILE"
-  fi
-  
-  # Step 5: Setup passwordless sudo if using SSH keys
-  if [ "$has_ssh_keys" = true ]; then
-    setup_passwordless_sudo
-  fi
-  
-  # Restart SSH service
-  systemctl restart ssh
-  
-  # Display current SSH configuration with better highlighting
-  echo "SSH has been configured with the following settings:"
-  echo
-  
-  # Get raw settings
-  current_settings=$(sshd -T | grep -E 'permitrootlogin|pubkeyauthentication|passwordauthentication|port|allowusers')
-  
-  # Format and highlight key values
-  while IFS= read -r line; do
-    # Extract key and value
-    key=$(echo "$line" | cut -d' ' -f1)
-    value=$(echo "$line" | cut -d' ' -f2-)
-    
-    # Format with consistent highlighting
-    echo -e "$key ${HIGHLIGHT}$value${CL}"
-  done <<< "$current_settings"
-  
-  echo
-  echo "Keep this terminal window open and verify you can connect with a new SSH session before closing."
-  echo
-  
-  msg_ok "SSH configuration completed"
-}
-
-# Function to set up SSH keys for a user
-setup_ssh_keys() {
-  # Get list of non-system users
-  existing_users=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd | sort)
-  
-  if [ -z "$existing_users" ]; then
-    msg_error "No non-system users found"
-    return
-  fi
-  
-  echo "Select a user to set up SSH keys for:"
-  echo
-  
-  # Display list of users
-  user_num=1
-  declare -A user_map
-  for user in $existing_users; do
-    echo -e "${HIGHLIGHT}$user_num${CL}) $user"
-    user_map[$user_num]=$user
-    ((user_num++))
-  done
-  
-  echo
-  echo -n "Enter user number: "
-  read -r selected_num
-  echo
-  
-  if [[ $selected_num =~ [0-9]+ && -n "${user_map[$selected_num]}" ]]; then
-    username="${user_map[$selected_num]}"
-    
-    echo "To set up SSH key authentication for $username:"
-    echo
-    echo "1. ON YOUR LOCAL MACHINE, first generate an SSH key if you don't already have one: ssh-keygen -t ed25519 -C \"email@example.com\""
-    echo
-    echo "2. Then copy your key to this server with: ssh-copy-id $username@$(hostname -I | awk '{print $1}')"
-    echo
-    
-    # Set up .ssh directory with correct permissions
-    user_home=$(eval echo ~${username})
-    mkdir -p ${user_home}/.ssh
-    touch ${user_home}/.ssh/authorized_keys
-    
-    # Fix permissions
-    chmod 700 ${user_home}/.ssh
-    chmod 600 ${user_home}/.ssh/authorized_keys
-    chown -R ${username}:${username} ${user_home}/.ssh
-    
-    msg_ok "SSH directory created with correct permissions for $username"
-    
-    echo "Please complete the following steps:"
-    echo "1. Keep this terminal window open"
-    echo "2. Open a new terminal window on your local machine"
-    echo "3. Generate and copy your SSH key as shown above"
-    echo "4. Return to this window when complete"
-    echo
-    
-    if get_yes_no "Have you copied your SSH key to the server?"; then
-      # Check if key was actually copied
-      if [ -s "${user_home}/.ssh/authorized_keys" ]; then
-        msg_ok "SSH key detected for $username"
-        return 0
-      else
-        msg_error "No SSH key detected for $username"
-        return 1
-      fi
-    else
-      msg_info "You can complete this step later, but some security features will be unavailable until then"
-      return 1
-    fi
-  else
-    msg_info "Invalid selection. SSH key setup cancelled."
-    return 1
-  fi
-}
-
-# Function to set up passwordless sudo for SSH users
-setup_passwordless_sudo() {
-  local current_user=$(logname || whoami)
-  
-  # Check if the current user is in sudo group
-  if groups "$current_user" | grep -q "\bsudo\b"; then
-    if get_yes_no "Would you like to configure passwordless sudo for $current_user? This allows running sudo commands without entering a password."; then
-      # Check if user has SSH keys configured
-      user_home=$(eval echo ~${current_user})
-      if [ -f "${user_home}/.ssh/authorized_keys" ] && [ -s "${user_home}/.ssh/authorized_keys" ]; then
-        ssh_key_status="SSH keys are properly configured for $current_user."
-        key_warning=""
-      else
-        ssh_key_status="WARNING: No SSH keys detected for $current_user!"
-        key_warning="\nEnabling passwordless sudo WITHOUT SSH key authentication is a security risk."
-      fi
-      
-      echo -e "$ssh_key_status$key_warning"
-      echo
-      
-      if get_yes_no "Are you sure you want to enable passwordless sudo for ${current_user}?"; then
-        # Configure passwordless sudo
-        echo "${current_user} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/99-${current_user}-nopasswd
-        chmod 440 /etc/sudoers.d/99-${current_user}-nopasswd
-        msg_ok "Passwordless sudo enabled for ${current_user}"
-        echo "Passwordless sudo: Enabled for $current_user" >> "$SUMMARY_FILE"
-      else
-        msg_info "Passwordless sudo configuration cancelled"
-      fi
-    else
-      msg_info "Passwordless sudo configuration skipped"
-      echo "Passwordless sudo: Not configured" >> "$SUMMARY_FILE"
-    fi
-  else
-    msg_info "Passwordless sudo not configured: $current_user is not in the sudo group"
-    echo "Passwordless sudo: Not configured (user not in sudo group)" >> "$SUMMARY_FILE"
-  fi
-}
-
-#######################
-# 2. FIREWALL SETUP
-#######################
-
-# Function to optionally configure UFW
-configure_firewall() {
-  if get_yes_no "Would you like to install and configure UFW (Uncomplicated Firewall)?"; then
-    if ! command -v ufw >/dev/null; then
-      msg_info "Installing UFW (Uncomplicated Firewall)..."
-      apt install -y ufw
-    fi
-    
-    # Check if UFW is already enabled
-    ufw_status=$(ufw status | head -1)
-    
-    # Confirm the basics
-    if get_yes_no "Do you want to apply the recommended basic rules? (Allow SSH, deny incoming, allow outgoing)"; then
-      # Configure basic rules
-      ufw default deny incoming
-      ufw default allow outgoing
-      ufw allow 22/tcp comment 'SSH'
-      msg_ok "Basic firewall rules configured"
-    fi
-    
-    # Ask about common web services
-    echo "Select web services to allow:"
-    echo
-    echo -e "${HIGHLIGHT}1${CL}) HTTP (port 80)"
-    echo -e "${HIGHLIGHT}2${CL}) HTTPS (port 443)"
-    echo -e "${HIGHLIGHT}3${CL}) None"
-    echo
-    echo -n "Enter your selections (e.g., 12 for both): "
-    read -r web_selections
-    echo
-    
-    if [[ $web_selections == *"1"* ]]; then
-      ufw allow 80/tcp comment 'HTTP'
-      msg_ok "HTTP traffic allowed"
-    fi
-    
-    if [[ $web_selections == *"2"* ]]; then
-      ufw allow 443/tcp comment 'HTTPS'
-      msg_ok "HTTPS traffic allowed"
-    fi
-    
-    # Auto-detect installed services and add rules
-    if [ ${#DETECTED_SERVICES[@]} -gt 0 ]; then
-      echo "Detected services with following ports:"
-      echo -e "$DETECTED_SERVICES_LIST"
-      
-      if get_yes_no "Would you like to add firewall rules for these detected services?"; then
-        for service in "${!DETECTED_SERVICES[@]}"; do
-          ports="${DETECTED_SERVICES[$service]}"
-          
-          # Skip services with N/A as port or already processed HTTP/HTTPS
-          if [ "$ports" = "N/A" ] || [ "$service" = "nginx" ] || [ "$service" = "apache2" ]; then
-            continue
-          fi
-          
-          # Add multiple port entries if comma-separated
-          IFS=',' read -ra PORT_ARRAY <<< "$ports"
-          for port in "${PORT_ARRAY[@]}"; do
-            ufw allow "$port"/tcp comment "$service"
-            msg_ok "Added rule for $service (Port $port)"
-          done
-        done
-      fi
-    fi
-    
-    # Ask about custom port
-    if get_yes_no "Do you want to allow any custom ports?"; then
-      while true; do
-        echo -n "Enter port number to allow (1-65535): "
-        read -r port
-        echo
-        
-        if [[ -z "$port" ]]; then
-          break
-        fi
-        
-        if [[ $port =~ ^[0-9]+$ && $port -ge 1 && $port -le 65535 ]]; then
-          echo "Select protocol:"
-          echo -e "${HIGHLIGHT}1${CL}) TCP only"
-          echo -e "${HIGHLIGHT}2${CL}) UDP only"
-          echo -e "${HIGHLIGHT}3${CL}) Both TCP and UDP"
-          echo
-          echo -n "Enter your selection [1-3]: "
-          read -r proto_selection
-          echo
-          
-          echo -n "Enter a description for this rule: "
-          read -r description
-          echo
-          
-          # Set up firewall rules based on protocol selection
-          if [ "$proto_selection" = "1" ]; then
-            ufw allow "$port"/tcp comment "$description"
-            msg_ok "Port $port/tcp allowed: $description"
-          elif [ "$proto_selection" = "2" ]; then
-            ufw allow "$port"/udp comment "$description"
-            msg_ok "Port $port/udp allowed: $description"
-          else
-            ufw allow "$port" comment "$description"
-            msg_ok "Port $port (tcp & udp) allowed: $description"
-          fi
-        else
-          echo "Please enter a valid port number between 1 and 65535."
-          echo
-        fi
-        
-        if ! get_yes_no "Do you want to allow another port?"; then
-          break
-        fi
-      done
-    fi
-    
-    # Enable UFW if it's not already enabled
-    if [[ "$ufw_status" != *"active"* ]]; then
-      if get_yes_no "Do you want to enable the firewall now with the configured rules?"; then
-        echo "y" | ufw enable
-        msg_ok "Firewall enabled successfully"
-        echo "Firewall (UFW): Enabled" >> "$SUMMARY_FILE"
-      else
-        msg_info "Firewall configured but not enabled"
-        echo "Firewall (UFW): Configured but not enabled" >> "$SUMMARY_FILE"
-      fi
-    else
-      if get_yes_no "Firewall is already active. Do you want to reload the configuration?"; then
-        ufw reload
-        msg_ok "Firewall configuration reloaded"
-        echo "Firewall (UFW): Active and reloaded" >> "$SUMMARY_FILE"
-      fi
+# Execute main
+main
