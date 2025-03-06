@@ -1,18 +1,3 @@
-#!/usr/bin/env bash
-
-# Debian Express Secure
-# Security & Network Configuration Script
-# License: MIT
-# Description: Secures and configures networking for Debian-based servers
-
-# Define colors and formatting
-RD="\033[01;31m"
-GN="\033[0;32m"
-YW="\033[33m"
-BL="\033[0;34m"
-CL="\033[m"
-CM="${GN}
-
 #######################
 # 3. FAIL2BAN SETUP
 #######################
@@ -592,7 +577,20 @@ main() {
 }
 
 # Run the main function
-main "$@"✓${CL}"
+main "$@"#!/usr/bin/env bash
+
+# Debian Express Secure
+# Security & Network Configuration Script
+# License: MIT
+# Description: Secures and configures networking for Debian-based servers
+
+# Define colors and formatting
+RD="\033[01;31m"
+GN="\033[0;32m"
+YW="\033[33m"
+BL="\033[0;34m"
+CL="\033[m"
+CM="${GN}✓${CL}"
 CROSS="${RD}✗${CL}"
 INFO="${YW}→${CL}"
 HIGHLIGHT="${BL}"
@@ -727,6 +725,24 @@ detect_services() {
         if [ -n "${seen_services[$service_key]}" ]; then
           continue
         fi
+    fi
+    
+    # Show UFW rules summary
+    echo "Current firewall configuration:"
+    echo
+    ufw status verbose
+    echo
+  else
+    msg_info "UFW configuration skipped"
+    echo "Firewall (UFW): Not configured" >> "$SUMMARY_FILE"
+    
+    # Add detected services to summary for cloud firewall reference
+    if [ -n "$DETECTED_SERVICES_LIST" ]; then
+      echo "Note: The following services were detected. Please ensure your cloud firewall allows these ports:" >> "$SUMMARY_FILE"
+      echo -e "$DETECTED_SERVICES_LIST" >> "$SUMMARY_FILE"
+    fi
+  fi
+}
         
         seen_services["$service_key"]=1
         echo "$service:$port" >> "$TMP_SERVICES_FILE"
@@ -1168,10 +1184,6 @@ setup_passwordless_sudo() {
 # 2. FIREWALL SETUP
 #######################
 
-#######################
-# 2. FIREWALL SETUP
-#######################
-
 # Function to optionally configure UFW
 configure_firewall() {
   if get_yes_no "Would you like to install and configure UFW (Uncomplicated Firewall)?"; then
@@ -1300,21 +1312,3 @@ configure_firewall() {
         msg_ok "Firewall configuration reloaded"
         echo "Firewall (UFW): Active and reloaded" >> "$SUMMARY_FILE"
       fi
-    fi
-    
-    # Show UFW rules summary
-    echo "Current firewall configuration:"
-    echo
-    ufw status verbose
-    echo
-  else
-    msg_info "UFW configuration skipped"
-    echo "Firewall (UFW): Not configured" >> "$SUMMARY_FILE"
-    
-    # Add detected services to summary for cloud firewall reference
-    if [ -n "$DETECTED_SERVICES_LIST" ]; then
-      echo "Note: The following services were detected. Please ensure your cloud firewall allows these ports:" >> "$SUMMARY_FILE"
-      echo -e "$DETECTED_SERVICES_LIST" >> "$SUMMARY_FILE"
-    fi
-  fi
-}
