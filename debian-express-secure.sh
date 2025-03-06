@@ -67,45 +67,6 @@ check_root() {
   fi
 }
 
-# Main function to orchestrate the security setup process
-main() {
-  check_root
-  check_debian_based
-  display_banner
-  detect_os
-  check_setup_script
-  
-  # Confirmation to proceed
-  if ! get_yes_no "This script will help you secure your Debian-based server. Do you want to proceed?"; then
-    echo "Setup cancelled. No changes were made."
-    exit 0
-  fi
-  
-  # Detect installed services
-  detect_services
-  
-  # SSH hardening
-  configure_ssh_security
-  
-  # Firewall configuration
-  configure_firewall
-  
-  # Install and configure Fail2Ban
-  setup_fail2ban
-  
-  # VPN setup
-  setup_vpn
-  
-  # Automatic security updates
-  setup_auto_updates
-  
-  # Finalize setup
-  finalize_security_setup
-}
-
-# Run the main function
-main "$@"
-
 # Function to check if it's a Debian-based system
 check_debian_based() {
   if [ ! -f /etc/debian_version ]; then
@@ -350,9 +311,119 @@ detect_services() {
   fi
 }
 
-###################
-# 1. SSH HARDENING
-###################
+# Function to set up SSH keys for a user
+setup_ssh_keys() {
+  # Get list of non-system users
+  existing_users=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd | sort)
+  
+  if [ -z "$existing_users" ]; then
+    msg_error "No non-system users found"
+    return
+  fi
+  
+  echo "Select a user to set up SSH keys for:"
+  echo
+  
+  # Display list of users
+  user_num=1
+  declare -A user_map
+  for user in $existing_users; do
+    echo -e "${HIGHLIGHT}$user_num${CL}) $user"
+    user_map[$user_num]=$user
+    ((user_num++))
+  done
+  
+  echo
+  echo -n "Enter user number: "
+  read -r selected_num
+  echo
+  
+  if [[ $selected_num =~ [0-9]+ && -n "${user_map[$selected_num]}" ]]; then
+    username="${user_map[$selected_num]}"
+    
+    echo "To set up SSH key authentication for $username:"
+    echo
+    echo "1. ON YOUR LOCAL MACHINE, first generate an SSH key if you don't already have one: ssh-keygen -t ed25519 -C \"email@example.com\""
+    echo
+    echo "2. Then copy your key to this server with: ssh-copy-id $username@$(hostname -I | awk '{print $1}')"
+    echo
+    
+    # Set up .ssh directory with correct permissions
+    user_home=$(eval echo ~${username})
+    mkdir -p ${user_home}/.ssh
+    touch ${user_home}/.ssh/authorized_keys
+    
+    # Fix permissions
+    chmod 700 ${user_home}/.ssh
+    chmod 600 ${user_home}/.ssh/authorized_keys
+    chown -R ${username}:${username} ${user_home}/.ssh
+    
+    msg_ok "SSH directory created with correct permissions for $username"
+    
+    echo "Please complete the following steps:"
+    echo "1. Keep this terminal window open"
+    echo "2. Open a new terminal window on your local machine"
+    echo "3. Generate and copy your SSH key as shown above"
+    echo "4. Return to this window when complete"
+    echo
+    
+    if get_yes_no "Have you copied your SSH key to the server?"; then
+      # Check if key was actually copied
+      if [ -s "${user_home}/.ssh/authorized_keys" ]; then
+        msg_ok "SSH key detected for $username"
+        return 0
+      else
+        msg_error "No SSH key detected for $username"
+        return 1
+      fi
+    else
+      msg_info "You can complete this step later, but some security features will be unavailable until then"
+      return 1
+    fi
+  else
+    msg_info "Invalid selection. SSH key setup cancelled."
+    return 1
+  fi
+}
+
+# Function to set up passwordless sudo for SSH users
+setup_passwordless_sudo() {
+  local current_user=$(logname || whoami)
+  
+  # Check if the current user is in sudo group
+  if groups "$current_user" | grep -q "\bsudo\b"; then
+    if get_yes_no "Would you like to configure passwordless sudo for $current_user? This allows running sudo commands without entering a password."; then
+      # Check if user has SSH keys configured
+      user_home=$(eval echo ~${current_user})
+      if [ -f "${user_home}/.ssh/authorized_keys" ] && [ -s "${user_home}/.ssh/authorized_keys" ]; then
+        ssh_key_status="SSH keys are properly configured for $current_user."
+        key_warning=""
+      else
+        ssh_key_status="WARNING: No SSH keys detected for $current_user!"
+        key_warning="\nEnabling passwordless sudo WITHOUT SSH key authentication is a security risk."
+      fi
+      
+      echo -e "$ssh_key_status$key_warning"
+      echo
+      
+      if get_yes_no "Are you sure you want to enable passwordless sudo for ${current_user}?"; then
+        # Configure passwordless sudo
+        echo "${current_user} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/99-${current_user}-nopasswd
+        chmod 440 /etc/sudoers.d/99-${current_user}-nopasswd
+        msg_ok "Passwordless sudo enabled for ${current_user}"
+        echo "Passwordless sudo: Enabled for $current_user" >> "$SUMMARY_FILE"
+      else
+        msg_info "Passwordless sudo configuration cancelled"
+      fi
+    else
+      msg_info "Passwordless sudo configuration skipped"
+      echo "Passwordless sudo: Not configured" >> "$SUMMARY_FILE"
+    fi
+  else
+    msg_info "Passwordless sudo not configured: $current_user is not in the sudo group"
+    echo "Passwordless sudo: Not configured (user not in sudo group)" >> "$SUMMARY_FILE"
+  fi
+}
 
 # Function to configure SSH and security settings
 configure_ssh_security() {
@@ -509,124 +580,6 @@ configure_ssh_security() {
   msg_ok "SSH configuration completed"
 }
 
-# Function to set up SSH keys for a user
-setup_ssh_keys() {
-  # Get list of non-system users
-  existing_users=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd | sort)
-  
-  if [ -z "$existing_users" ]; then
-    msg_error "No non-system users found"
-    return
-  fi
-  
-  echo "Select a user to set up SSH keys for:"
-  echo
-  
-  # Display list of users
-  user_num=1
-  declare -A user_map
-  for user in $existing_users; do
-    echo -e "${HIGHLIGHT}$user_num${CL}) $user"
-    user_map[$user_num]=$user
-    ((user_num++))
-  done
-  
-  echo
-  echo -n "Enter user number: "
-  read -r selected_num
-  echo
-  
-  if [[ $selected_num =~ [0-9]+ && -n "${user_map[$selected_num]}" ]]; then
-    username="${user_map[$selected_num]}"
-    
-    echo "To set up SSH key authentication for $username:"
-    echo
-    echo "1. ON YOUR LOCAL MACHINE, first generate an SSH key if you don't already have one: ssh-keygen -t ed25519 -C \"email@example.com\""
-    echo
-    echo "2. Then copy your key to this server with: ssh-copy-id $username@$(hostname -I | awk '{print $1}')"
-    echo
-    
-    # Set up .ssh directory with correct permissions
-    user_home=$(eval echo ~${username})
-    mkdir -p ${user_home}/.ssh
-    touch ${user_home}/.ssh/authorized_keys
-    
-    # Fix permissions
-    chmod 700 ${user_home}/.ssh
-    chmod 600 ${user_home}/.ssh/authorized_keys
-    chown -R ${username}:${username} ${user_home}/.ssh
-    
-    msg_ok "SSH directory created with correct permissions for $username"
-    
-    echo "Please complete the following steps:"
-    echo "1. Keep this terminal window open"
-    echo "2. Open a new terminal window on your local machine"
-    echo "3. Generate and copy your SSH key as shown above"
-    echo "4. Return to this window when complete"
-    echo
-    
-    if get_yes_no "Have you copied your SSH key to the server?"; then
-      # Check if key was actually copied
-      if [ -s "${user_home}/.ssh/authorized_keys" ]; then
-        msg_ok "SSH key detected for $username"
-        return 0
-      else
-        msg_error "No SSH key detected for $username"
-        return 1
-      fi
-    else
-      msg_info "You can complete this step later, but some security features will be unavailable until then"
-      return 1
-    fi
-  else
-    msg_info "Invalid selection. SSH key setup cancelled."
-    return 1
-  fi
-}
-
-# Function to set up passwordless sudo for SSH users
-setup_passwordless_sudo() {
-  local current_user=$(logname || whoami)
-  
-  # Check if the current user is in sudo group
-  if groups "$current_user" | grep -q "\bsudo\b"; then
-    if get_yes_no "Would you like to configure passwordless sudo for $current_user? This allows running sudo commands without entering a password."; then
-      # Check if user has SSH keys configured
-      user_home=$(eval echo ~${current_user})
-      if [ -f "${user_home}/.ssh/authorized_keys" ] && [ -s "${user_home}/.ssh/authorized_keys" ]; then
-        ssh_key_status="SSH keys are properly configured for $current_user."
-        key_warning=""
-      else
-        ssh_key_status="WARNING: No SSH keys detected for $current_user!"
-        key_warning="\nEnabling passwordless sudo WITHOUT SSH key authentication is a security risk."
-      fi
-      
-      echo -e "$ssh_key_status$key_warning"
-      echo
-      
-      if get_yes_no "Are you sure you want to enable passwordless sudo for ${current_user}?"; then
-        # Configure passwordless sudo
-        echo "${current_user} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/99-${current_user}-nopasswd
-        chmod 440 /etc/sudoers.d/99-${current_user}-nopasswd
-        msg_ok "Passwordless sudo enabled for ${current_user}"
-        echo "Passwordless sudo: Enabled for $current_user" >> "$SUMMARY_FILE"
-      else
-        msg_info "Passwordless sudo configuration cancelled"
-      fi
-    else
-      msg_info "Passwordless sudo configuration skipped"
-      echo "Passwordless sudo: Not configured" >> "$SUMMARY_FILE"
-    fi
-  else
-    msg_info "Passwordless sudo not configured: $current_user is not in the sudo group"
-    echo "Passwordless sudo: Not configured (user not in sudo group)" >> "$SUMMARY_FILE"
-  fi
-}
-
-#######################
-# 2. FIREWALL SETUP
-#######################
-
 # Function to optionally configure UFW
 configure_firewall() {
   if get_yes_no "Would you like to install and configure UFW (Uncomplicated Firewall)?"; then
@@ -744,7 +697,29 @@ configure_firewall() {
       if get_yes_no "Do you want to enable the firewall now with the configured rules?"; then
         echo "y" | ufw enable
         msg_ok "Firewall enabled successfully"
-        echo "Firewall (UFW): Not configured" >> "$SUMMARY_FILE"
+        echo "Firewall (UFW): Enabled" >> "$SUMMARY_FILE"
+      else
+        msg_info "Firewall configured but not enabled"
+        echo "Firewall (UFW): Configured but not enabled" >> "$SUMMARY_FILE"
+      fi
+    else
+      if get_yes_no "Firewall is already active. Do you want to reload the configuration?"; then
+        ufw reload
+        msg_ok "Firewall configuration reloaded"
+        echo "Firewall (UFW): Active and reloaded" >> "$SUMMARY_FILE"
+      else
+        echo "Firewall (UFW): Active but not reloaded" >> "$SUMMARY_FILE"
+      fi
+    fi
+    
+    # Show UFW rules summary
+    echo "Current firewall configuration:"
+    echo
+    ufw status verbose
+    echo
+  else
+    msg_info "UFW configuration skipped"
+    echo "Firewall (UFW): Not configured" >> "$SUMMARY_FILE"
     
     # Add detected services to summary for cloud firewall reference
     if [ -n "$DETECTED_SERVICES_LIST" ]; then
@@ -753,96 +728,6 @@ configure_firewall() {
     fi
   fi
 }
-
-#######################
-# 3. FAIL2BAN SETUP
-#######################
-
-# Setup Fail2Ban function with simplified configuration
-setup_fail2ban() {
-  if get_yes_no "Would you like to install and configure Fail2Ban? It helps protect your server against brute-force attacks."; then
-    msg_info "Installing Fail2Ban..."
-    apt install -y fail2ban
-    
-    # Create a local configuration with default settings
-    cat > /etc/fail2ban/jail.local << EOF
-[DEFAULT]
-# Ban hosts for 10 minutes (600 seconds)
-bantime = 600
-# Find time window of 10 minutes
-findtime = 600
-# Allow 5 retries
-maxretry = 5
-# Ignore localhost
-ignoreip = 127.0.0.1 ::1
-EOF
-    
-    # Ask for IP whitelist with better formatting and examples
-    echo "Enter IPs or ranges to whitelist (space-separated, leave empty for none):"
-    echo "Examples: 192.168.1.5  10.0.0.0/24  192.168.0.0/16"
-    echo
-    echo -n "> "
-    read -r whitelist_ips
-    echo
-    
-    if [[ -n "$whitelist_ips" ]]; then
-      # Append to ignoreip
-      sed -i "s/ignoreip = 127.0.0.1 ::1/ignoreip = 127.0.0.1 ::1 $whitelist_ips/" /etc/fail2ban/jail.local
-      msg_ok "Added whitelisted IPs: $whitelist_ips"
-      echo "Fail2Ban whitelist: $whitelist_ips" >> "$SUMMARY_FILE"
-    fi
-    
-    # Add SSH jail
-    cat >> /etc/fail2ban/jail.local << EOF
-
-[sshd]
-enabled = true
-port = ssh
-filter = sshd
-logpath = /var/log/auth.log
-maxretry = 5
-EOF
-    
-    # Enable and start Fail2Ban
-    systemctl enable fail2ban
-    systemctl restart fail2ban
-    
-    msg_ok "Fail2Ban installed and configured with default settings"
-    echo "Fail2Ban: Installed and active" >> "$SUMMARY_FILE"
-    echo "Fail2Ban settings: bantime=600s, findtime=600s, maxretry=5" >> "$SUMMARY_FILE"
-    echo "Fail2Ban command to modify settings: sudo nano /etc/fail2ban/jail.local" >> "$SUMMARY_FILE"
-    echo "Fail2Ban command to reload: sudo systemctl reload fail2ban" >> "$SUMMARY_FILE"
-    
-    # Save command for adding VPN subnet to whitelist for later
-    mkdir -p "$TEMP_DIR"
-    echo "To add a VPN subnet to the Fail2Ban whitelist later, use:" > "$TEMP_DIR/fail2ban_vpn.txt"
-    echo "sudo fail2ban-client set sshd addignoreip VPN_SUBNET" >> "$TEMP_DIR/fail2ban_vpn.txt"
-    echo "# Example: sudo fail2ban-client set sshd addignoreip 10.8.0.0/24" >> "$TEMP_DIR/fail2ban_vpn.txt"
-    
-    # Wait a moment for the service to fully start
-    echo "Waiting for Fail2Ban service to fully start..."
-    sleep 3
-    
-    # Check service status
-    if systemctl is-active --quiet fail2ban; then
-      echo "Fail2Ban status:"
-      echo
-      fail2ban-client status sshd 2>/dev/null || echo "Fail2Ban is starting up. Run 'sudo fail2ban-client status sshd' later to check status."
-      echo
-    else
-      echo "Fail2Ban status: Service is starting up."
-      echo "Run 'sudo systemctl status fail2ban' later to verify it's running properly."
-      echo
-    fi
-  else
-    msg_info "Fail2Ban installation skipped"
-    echo "Fail2Ban: Not installed" >> "$SUMMARY_FILE"
-  fi
-}
-
-###################
-# 4. VPN SETUP
-###################
 
 # Setup VPN function
 setup_vpn() {
@@ -1006,10 +891,6 @@ setup_netbird() {
   fi
 }
 
-##############################
-# 5. AUTOMATIC SECURITY UPDATES
-##############################
-
 # Function to set up automatic security updates
 setup_auto_updates() {
   if get_yes_no "Would you like to configure automatic security updates?"; then
@@ -1042,10 +923,6 @@ EOF
     echo "Automatic security updates: Not configured" >> "$SUMMARY_FILE"
   fi
 }
-
-#########################
-# SUMMARY AND COMPLETION
-#########################
 
 # Function to display security summary
 display_security_summary() {
@@ -1263,7 +1140,10 @@ display_security_summary() {
 }
 
 # Function to clean up and complete setup
-
+finalize_security_setup() {
+  msg_info "Finalizing security setup..."
+  
+  # System cleanup
   apt autoremove -y
   apt clean
   
@@ -1291,20 +1171,86 @@ display_security_summary() {
   else
     echo "Please remember to reboot your system manually when convenient."
   fi
-} (UFW): Active but not reloaded" >> "$SUMMARY_FILE"
-      fi
+}
+
+# Setup Fail2Ban function with simplified configuration
+setup_fail2ban() {
+  if get_yes_no "Would you like to install and configure Fail2Ban? It helps protect your server against brute-force attacks."; then
+    msg_info "Installing Fail2Ban..."
+    apt install -y fail2ban
+    
+    # Create a local configuration with default settings
+    cat > /etc/fail2ban/jail.local << EOF
+[DEFAULT]
+# Ban hosts for 10 minutes (600 seconds)
+bantime = 600
+# Find time window of 10 minutes
+findtime = 600
+# Allow 5 retries
+maxretry = 5
+# Ignore localhost
+ignoreip = 127.0.0.1 ::1
+EOF
+    
+    # Ask for IP whitelist with better formatting and examples
+    echo "Enter IPs or ranges to whitelist (space-separated, leave empty for none):"
+    echo "Examples: 192.168.1.5  10.0.0.0/24  192.168.0.0/16"
+    echo
+    echo -n "> "
+    read -r whitelist_ips
+    echo
+    
+    if [[ -n "$whitelist_ips" ]]; then
+      # Append to ignoreip
+      sed -i "s/ignoreip = 127.0.0.1 ::1/ignoreip = 127.0.0.1 ::1 $whitelist_ips/" /etc/fail2ban/jail.local
+      msg_ok "Added whitelisted IPs: $whitelist_ips"
+      echo "Fail2Ban whitelist: $whitelist_ips" >> "$SUMMARY_FILE"
+    fi
+    
+    # Add SSH jail
+    cat >> /etc/fail2ban/jail.local << EOF
+
+[sshd]
+enabled = true
+port = ssh
+filter = sshd
+logpath = /var/log/auth.log
+maxretry = 5
+EOF
+    
+    # Enable and start Fail2Ban
+    systemctl enable fail2ban
+    systemctl restart fail2ban
+    
+    msg_ok "Fail2Ban installed and configured with default settings"
+    echo "Fail2Ban: Installed and active" >> "$SUMMARY_FILE"
+    echo "Fail2Ban settings: bantime=600s, findtime=600s, maxretry=5" >> "$SUMMARY_FILE"
+    echo "Fail2Ban command to modify settings: sudo nano /etc/fail2ban/jail.local" >> "$SUMMARY_FILE"
+    echo "Fail2Ban command to reload: sudo systemctl reload fail2ban" >> "$SUMMARY_FILE"
+    
+    # Save command for adding VPN subnet to whitelist for later
+    mkdir -p "$TEMP_DIR"
+    echo "To add a VPN subnet to the Fail2Ban whitelist later, use:" > "$TEMP_DIR/fail2ban_vpn.txt"
+    echo "sudo fail2ban-client set sshd addignoreip VPN_SUBNET" >> "$TEMP_DIR/fail2ban_vpn.txt"
+    echo "# Example: sudo fail2ban-client set sshd addignoreip 10.8.0.0/24" >> "$TEMP_DIR/fail2ban_vpn.txt"
+    
+    # Wait a moment for the service to fully start
+    echo "Waiting for Fail2Ban service to fully start..."
+    sleep 3
+    
+    # Check service status
+    if systemctl is-active --quiet fail2ban; then
+      echo "Fail2Ban status:"
+      echo
+      fail2ban-client status sshd 2>/dev/null || echo "Fail2Ban is starting up. Run 'sudo fail2ban-client status sshd' later to check status."
+      echo
+    else
+      echo "Fail2Ban status: Service is starting up."
+      echo "Run 'sudo systemctl status fail2ban' later to verify it's running properly."
+      echo
     fi
   else
-    msg_info "UFW configuration skipped"
-    echo "Firewall (UFW): Active and reloaded" >> "$SUMMARY_FILE"
-      else
-        echo "Firewall (UFW): Enabled" >> "$SUMMARY_FILE"
-      else
-        msg_info "Firewall configured but not enabled"
-        echo "Firewall (UFW): Configured but not enabled" >> "$SUMMARY_FILE"
-      fi
-    else
-      if get_yes_no "Firewall is already active. Do you want to reload the configuration?"; then
-        ufw reload
-        msg_ok "Firewall configuration reloaded"
-        echo "Firewall
+    msg_info "Fail2Ban installation skipped"
+    echo "Fail2Ban: Not installed" >> "$SUMMARY_FILE"
+  fi
+}
