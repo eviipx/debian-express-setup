@@ -26,6 +26,15 @@ touch "$STATE_FILE"
 # Flag to track if Docker has been installed
 DOCKER_INSTALLED=false
 
+# Flag to track if apt update has been run
+APT_UPDATED=false
+
+# Cache system information (populated in main function)
+SERVER_IP=""
+OS_NAME=""
+OS_VERSION=""
+OS_PRETTY=""
+
 # Function to display success messages
 msg_ok() {
   echo -e "${CM} $1"
@@ -84,7 +93,7 @@ check_debian_based() {
   fi
 }
 
-# Detect OS version and display it
+# Detect OS version and display it (sets global variables)
 detect_os() {
   if [ -f /etc/debian_version ]; then
     OS_VERSION=$(cat /etc/debian_version)
@@ -100,6 +109,19 @@ detect_os() {
   else
     return 1  # Not a Debian-based system
   fi
+}
+
+# Cache server IP address
+cache_server_ip() {
+  if [ -z "$SERVER_IP" ]; then
+    SERVER_IP=$(hostname -I | awk '{print $1}')
+  fi
+}
+
+# Run apt update only if not already done (used after PPA additions)
+run_apt_update() {
+  apt update
+  APT_UPDATED=true
 }
 
 # Function to display script banner
@@ -126,6 +148,7 @@ update_system() {
   if get_yes_no "Do you want to update and upgrade system packages?"; then
     msg_info "Updating and upgrading system packages..."
     apt update && apt upgrade -y
+    APT_UPDATED=true  # Mark that apt update has been run
     msg_ok "System packages updated and upgraded"
   else
     msg_info "Skipping system update"
@@ -368,19 +391,43 @@ configure_swap() {
 # Function to create and configure swap file
 create_swap_file() {
   local size_mb=$1
-  
+
   msg_info "Creating ${size_mb}MB swap file..."
-  
+
+  # Check available disk space
+  available_space=$(df -m / | tail -1 | awk '{print $4}')
+  if [ "$available_space" -lt "$size_mb" ]; then
+    msg_error "Not enough disk space. Available: ${available_space}MB, Required: ${size_mb}MB"
+    return 1
+  fi
+
   # Remove old swap file if it exists
   if [ -f /swapfile ]; then
+    swapoff /swapfile 2>/dev/null || true
     rm -f /swapfile
   fi
-  
-  # Create new swap file
-  fallocate -l ${size_mb}M /swapfile
+
+  # Create new swap file (try fallocate first, fall back to dd if it fails)
+  if ! fallocate -l ${size_mb}M /swapfile 2>/dev/null; then
+    msg_info "fallocate not supported, using dd instead (this may take a moment)..."
+    if ! dd if=/dev/zero of=/swapfile bs=1M count=${size_mb} status=progress; then
+      msg_error "Failed to create swap file"
+      return 1
+    fi
+  fi
+
   chmod 600 /swapfile
-  mkswap /swapfile
-  swapon /swapfile
+  if ! mkswap /swapfile; then
+    msg_error "Failed to format swap file"
+    rm -f /swapfile
+    return 1
+  fi
+
+  if ! swapon /swapfile; then
+    msg_error "Failed to enable swap file"
+    rm -f /swapfile
+    return 1
+  fi
   
   # Add to fstab if not already there
   if ! grep -q "^/swapfile none swap" /etc/fstab; then
@@ -399,11 +446,19 @@ create_swap_file() {
 install_nohang() {
   if get_yes_no "Would you like to install nohang? It's a daemon that prevents system freezes caused by out-of-memory conditions."; then
     msg_info "Installing nohang..."
-    
-    # Add repository and install nohang
-    add-apt-repository ppa:oibaf/test -y
-    apt update
-    apt install -y nohang
+
+    # Add repository and install nohang (Ubuntu only - checked in optimize_system)
+    if [ "$OS_NAME" = "Ubuntu" ]; then
+      add-apt-repository ppa:oibaf/test -y
+      run_apt_update
+      apt install -y nohang
+    else
+      # For Debian, try to install from backports or standard repo
+      apt install -y nohang 2>/dev/null || {
+        msg_error "Nohang is not available in Debian repositories. Skipping."
+        return 1
+      }
+    fi
     
     # Enable and start nohang services
     systemctl enable --now nohang-desktop.service
@@ -486,13 +541,20 @@ EOF
 setup_monitoring_tools() {
   if get_yes_no "Would you like to install a set of tools for system information, monitoring, and internet speed testing?"; then
     msg_info "Installing system monitoring and utility tools..."
-    
+
     echo "Installing system monitoring tools..."
-    
-    # Install fastfetch
-    add-apt-repository ppa:zhangsongcui3371/fastfetch -y
-    apt update
-    apt install -y fastfetch
+
+    # Install fastfetch (Ubuntu only via PPA, Debian from standard repo)
+    if [ "$OS_NAME" = "Ubuntu" ]; then
+      add-apt-repository ppa:zhangsongcui3371/fastfetch -y
+      run_apt_update
+      apt install -y fastfetch
+    else
+      # For Debian, try to install from backports or skip
+      apt install -y fastfetch 2>/dev/null || {
+        msg_info "Fastfetch not available via standard Debian repo. Install manually if needed."
+      }
+    fi
     echo -e "${CM} Fastfetch - System information display"
     
     # Install btop
@@ -535,11 +597,14 @@ setup_containers() {
 setup_docker() {
   if ! command -v docker >/dev/null; then
     msg_info "Installing Docker..."
-    
+
     # Install Docker using the official script
-    curl -fsSL https://get.docker.com | sh
-    
-    if [[ $? -eq 0 ]]; then
+    if ! curl -fsSL https://get.docker.com | sh; then
+      msg_error "Failed to download or execute Docker installation script"
+      return 1
+    fi
+
+    if command -v docker >/dev/null; then
       # Create docker group and add current non-root user if exists
       groupadd -f docker
       
@@ -606,15 +671,15 @@ setup_dockge() {
       docker compose up -d
       
       if [[ $? -eq 0 ]]; then
-        # Get server IP
-        server_ip=$(hostname -I | awk '{print $1}')
+        # Get server IP from cache
+        cache_server_ip
         dockge_port=5001
         
         # Record for firewall configuration
         record_installed_service "dockge" "$dockge_port"
-        
+
         echo "Dockge container manager has been installed successfully."
-        echo "Access URL: http://$server_ip:$dockge_port"
+        echo "Access URL: http://$SERVER_IP:$dockge_port"
         echo "Follow the on-screen instructions to create an admin account during first login."
         echo
         
@@ -636,16 +701,16 @@ setup_dockge() {
 
 # Function to display system information summary
 display_summary() {
-  # Get server IP
-  server_ip=$(hostname -I | awk '{print $1}')
+  # Use cached server IP
+  cache_server_ip
   
   echo
   echo "=== Debian Express Setup Summary ==="
   echo
   echo "System Information:"
   echo -e "• Hostname: ${HIGHLIGHT}$(hostname)${CL}"
-  echo -e "• IP Address: ${HIGHLIGHT}$server_ip${CL}"
-  echo -e "• OS: ${HIGHLIGHT}$(lsb_release -ds)${CL}"
+  echo -e "• IP Address: ${HIGHLIGHT}$SERVER_IP${CL}"
+  echo -e "• OS: ${HIGHLIGHT}$OS_PRETTY${CL}"
   echo
   
   # Swap status
@@ -685,7 +750,7 @@ display_summary() {
     # Check if Dockge is installed - use Docker ps to verify
     if docker ps 2>/dev/null | grep -q "dockge"; then
       echo -e "• Dockge container manager: ${HIGHLIGHT}Installed and running${CL}"
-      echo -e "  - URL: ${HIGHLIGHT}http://$server_ip:5001${CL}"
+      echo -e "  - URL: ${HIGHLIGHT}http://$SERVER_IP:5001${CL}"
       echo -e "  - First-time setup required on first access"
     else
       echo -e "• Dockge container manager: ${HIGHLIGHT}Not installed${CL}"
@@ -748,6 +813,7 @@ main() {
   check_debian_based
   display_banner
   detect_os
+  cache_server_ip  # Cache server IP for use throughout script
   
   # Confirmation to proceed
   if ! get_yes_no "This script will help you set up and optimize your Debian-based server. Do you want to proceed?"; then
