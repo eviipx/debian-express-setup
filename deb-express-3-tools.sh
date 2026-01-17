@@ -211,15 +211,37 @@ install_dockge() {
 
   msg_info "Installing Dockge..."
 
-  mkdir -p /opt/stacks/dockge/data
-  cd /opt/stacks/dockge
+  # Create directory structure following standard
+  mkdir -p /srv/docker/dockge/data
 
-  curl -fsSL https://raw.githubusercontent.com/louislam/dockge/master/compose.yaml -o docker-compose.yml
+  # Create docker-compose.yml with custom configuration
+  cat > /srv/docker/dockge/docker-compose.yml <<'EOF'
+version: "3.8"
+
+services:
+  dockge:
+    image: louislam/dockge:1
+    container_name: dockge
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    environment:
+      - TZ=Europe/Stockholm
+      - DOCKGE_STACKS_DIR=/srv/docker
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/app/data
+      - /srv/docker:/srv/docker
+EOF
+
+  cd /srv/docker/dockge
 
   if docker compose up -d; then
     cache_server_ip
     msg_ok "Dockge installed successfully"
     echo
+    echo "Location: /srv/docker/dockge/"
+    echo "Stacks directory: /srv/docker/"
     echo "Access Dockge at: http://$SERVER_IP:5001"
     echo "Create admin account on first login"
     echo
