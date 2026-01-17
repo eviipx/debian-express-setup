@@ -266,7 +266,7 @@ configure_swap() {
     return
   fi
 
-  # Check if swap exists
+  # Check if swap exists and list all swap files
   swap_exists=0
   swap_size=0
   if [ "$(swapon --show | wc -l)" -gt 0 ]; then
@@ -296,6 +296,14 @@ configure_swap() {
     echo -e "Current swap: ${HIGHLIGHT}${swap_size}MB${CL}, RAM: ${HIGHLIGHT}${ram_size}MB${CL}"
     echo -e "Recommended swap: ${HIGHLIGHT}${recommended_swap}MB${CL}"
     echo
+
+    # Show existing swap files
+    if [ "$(swapon --show --noheadings | wc -l)" -gt 1 ]; then
+      echo -e "${YW}Warning: Multiple swap files detected:${CL}"
+      swapon --show
+      echo
+    fi
+
     echo "What would you like to do?"
     echo -e "${HIGHLIGHT}1${CL}) Keep current swap configuration"
     echo -e "${HIGHLIGHT}2${CL}) Resize swap to recommended size (${recommended_swap}MB)"
@@ -310,7 +318,7 @@ configure_swap() {
         msg_info "Keeping current swap configuration"
         ;;
       2)
-        swapoff -a
+        remove_all_swap
         create_swap_file "${recommended_swap}"
         ;;
       3)
@@ -318,7 +326,7 @@ configure_swap() {
         read -r custom_size
         echo
         if [ -n "$custom_size" ]; then
-          swapoff -a
+          remove_all_swap
           create_swap_file "${custom_size}"
         else
           msg_info "Swap configuration unchanged"
@@ -365,23 +373,46 @@ configure_swap() {
   fi
 }
 
+# Function to remove all existing swap files
+remove_all_swap() {
+  msg_info "Removing all existing swap..."
+
+  # Get list of all active swap files
+  local swap_files=$(swapon --show=NAME --noheadings)
+
+  if [ -n "$swap_files" ]; then
+    # Disable all swap
+    swapoff -a
+
+    # Remove each swap file and its fstab entry
+    while IFS= read -r swap_file; do
+      # Only remove if it's a file (not a partition)
+      if [ -f "$swap_file" ]; then
+        msg_info "Removing $swap_file..."
+        rm -f "$swap_file"
+
+        # Remove from fstab
+        if grep -q "$swap_file" /etc/fstab 2>/dev/null; then
+          sed -i "\|$swap_file|d" /etc/fstab
+        fi
+      fi
+    done <<< "$swap_files"
+
+    msg_ok "All existing swap removed"
+  fi
+}
+
 # Function to create and configure swap file
 create_swap_file() {
   local size_mb=$1
 
-  msg_info "Creating ${size_mb}MB swap file..."
+  msg_info "Creating ${size_mb}MB swap file at /swapfile..."
 
   # Check available disk space
   available_space=$(df -m / | tail -1 | awk '{print $4}')
   if [ "$available_space" -lt "$size_mb" ]; then
     msg_error "Not enough disk space. Available: ${available_space}MB, Required: ${size_mb}MB"
     return 1
-  fi
-
-  # Remove old swap file if it exists
-  if [ -f /swapfile ]; then
-    swapoff /swapfile 2>/dev/null || true
-    rm -f /swapfile
   fi
 
   # Create new swap file (try fallocate first, fall back to dd if it fails)
@@ -406,17 +437,16 @@ create_swap_file() {
     return 1
   fi
 
-  # Add to fstab if not already there
-  if ! grep -q "^/swapfile none swap" /etc/fstab; then
-    echo '/swapfile none swap sw 0 0' >> /etc/fstab
-  fi
+  # Clean up any old swap entries from fstab and add new one
+  sed -i '/[[:space:]]swap[[:space:]]/d' /etc/fstab
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
 
   # Configure swappiness and cache pressure
   echo 'vm.swappiness=10' > /etc/sysctl.d/99-swappiness.conf
   echo 'vm.vfs_cache_pressure=50' >> /etc/sysctl.d/99-swappiness.conf
   sysctl -p /etc/sysctl.d/99-swappiness.conf > /dev/null
 
-  msg_ok "Swap file created and configured (${size_mb}MB)"
+  msg_ok "Swap file created and configured (${size_mb}MB at /swapfile)"
 }
 
 # Function to optimize IO scheduler
