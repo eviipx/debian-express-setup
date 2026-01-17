@@ -559,78 +559,6 @@ EOF
 }
 
 ###################
-# VPN SETUP
-###################
-
-setup_vpn() {
-  if ! get_yes_no "Set up a VPN? (Tailscale or Netbird)"; then
-    msg_info "Skipping VPN setup"
-    echo "VPN: Not configured" >> "$SUMMARY_FILE"
-    return
-  fi
-
-  echo "Select VPN provider:"
-  echo
-  echo -e "${HIGHLIGHT}1${CL}) Tailscale"
-  echo -e "${HIGHLIGHT}2${CL}) Netbird"
-  echo
-  echo -n "Enter option [1-2]: "
-  read -r vpn_choice
-  echo
-
-  case $vpn_choice in
-    1) setup_tailscale ;;
-    2) setup_netbird ;;
-    *) msg_info "Invalid option. Skipping VPN." ;;
-  esac
-}
-
-setup_tailscale() {
-  msg_info "Installing Tailscale..."
-
-  if ! curl -fsSL https://tailscale.com/install.sh | sh; then
-    msg_error "Tailscale installation failed"
-    return 1
-  fi
-
-  if get_yes_no "Do you have a Tailscale auth key?"; then
-    echo -n "Enter auth key: "
-    read -r auth_key
-    echo
-    tailscale up --authkey="$auth_key"
-  else
-    tailscale up
-    msg_info "Please authenticate using the URL above"
-  fi
-
-  tailscale_ip=$(tailscale ip 2>/dev/null || echo "Unknown")
-  msg_ok "Tailscale configured"
-  echo "VPN: Tailscale" >> "$SUMMARY_FILE"
-  echo "Tailscale IP: $tailscale_ip" >> "$SUMMARY_FILE"
-}
-
-setup_netbird() {
-  msg_info "Installing Netbird..."
-
-  if ! curl -fsSL https://pkgs.netbird.io/install.sh | sh; then
-    msg_error "Netbird installation failed"
-    return 1
-  fi
-
-  echo -n "Enter Netbird setup key: "
-  read -r setup_key
-  echo
-
-  if [ -n "$setup_key" ]; then
-    netbird up --setup-key "$setup_key"
-    msg_ok "Netbird configured"
-    echo "VPN: Netbird" >> "$SUMMARY_FILE"
-  else
-    msg_error "No setup key provided"
-  fi
-}
-
-###################
 # AUTO UPDATES
 ###################
 
@@ -741,7 +669,6 @@ main() {
   configure_ssh_security
   configure_firewall
   setup_fail2ban
-  setup_vpn
   setup_auto_updates
 
   finalize_security_setup
