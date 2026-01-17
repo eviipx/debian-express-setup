@@ -570,7 +570,7 @@ EOF
 
       if [[ -n "$valid_ips" ]]; then
         # Append to ignoreip
-        sed -i "s/ignoreip = 127.0.0.1 ::1/ignoreip = 127.0.0.1 ::1$valid_ips/" /etc/fail2ban/jail.local
+        sed -i "s|ignoreip = 127.0.0.1 ::1|ignoreip = 127.0.0.1 ::1$valid_ips|" /etc/fail2ban/jail.local
         msg_ok "Added whitelisted IPs:$valid_ips"
         echo "Fail2Ban whitelist:$valid_ips" >> "$SUMMARY_FILE"
       fi
