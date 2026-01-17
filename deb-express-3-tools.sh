@@ -126,7 +126,7 @@ EOF
 ###########################
 
 install_monitoring_tools() {
-  if ! get_yes_no "Install monitoring tools? (Fastfetch, Btop, Speedtest)"; then
+  if ! get_yes_no "Install monitoring tools? (Fastfetch, Btop)"; then
     msg_info "Skipping monitoring tools"
     return
   fi
@@ -151,12 +151,6 @@ install_monitoring_tools() {
   if get_yes_no "Install Btop? (Modern resource monitor)"; then
     apt install -y btop
     msg_ok "Btop installed"
-  fi
-
-  # Speedtest-cli
-  if get_yes_no "Install Speedtest-cli? (Internet speed test)"; then
-    apt install -y speedtest-cli
-    msg_ok "Speedtest-cli installed"
   fi
 }
 
@@ -239,50 +233,11 @@ install_dockge() {
 ###########################
 
 setup_vpn() {
-  if ! get_yes_no "Set up a VPN? (Tailscale or Netbird)"; then
+  if ! get_yes_no "Set up Netbird VPN?"; then
     msg_info "Skipping VPN setup"
     return
   fi
 
-  echo "Select VPN provider:"
-  echo
-  echo -e "${HIGHLIGHT}1${CL}) Tailscale"
-  echo -e "${HIGHLIGHT}2${CL}) Netbird"
-  echo
-  echo -n "Enter option [1-2]: "
-  read -r vpn_choice
-  echo
-
-  case $vpn_choice in
-    1) setup_tailscale ;;
-    2) setup_netbird ;;
-    *) msg_info "Invalid option. Skipping VPN." ;;
-  esac
-}
-
-setup_tailscale() {
-  msg_info "Installing Tailscale..."
-
-  if ! curl -fsSL https://tailscale.com/install.sh | sh; then
-    msg_error "Tailscale installation failed"
-    return 1
-  fi
-
-  if get_yes_no "Do you have a Tailscale auth key?"; then
-    echo -n "Enter auth key: "
-    read -r auth_key
-    echo
-    tailscale up --authkey="$auth_key"
-  else
-    tailscale up
-    msg_info "Please authenticate using the URL above"
-  fi
-
-  tailscale_ip=$(tailscale ip 2>/dev/null || echo "Unknown")
-  msg_ok "Tailscale configured"
-}
-
-setup_netbird() {
   msg_info "Installing Netbird..."
 
   if ! curl -fsSL https://pkgs.netbird.io/install.sh | sh; then
@@ -317,18 +272,9 @@ display_summary() {
 
   command -v fastfetch >/dev/null && echo "• Fastfetch: Installed"
   command -v btop >/dev/null && echo "• Btop: Installed"
-  command -v speedtest-cli >/dev/null && echo "• Speedtest-cli: Installed"
   command -v docker >/dev/null && echo "• Docker: Installed ($(docker --version | cut -d' ' -f3 | tr -d ','))"
   docker ps 2>/dev/null | grep -q dockge && echo "• Dockge: Installed (http://$SERVER_IP:5001)"
-
-  # Check VPN status
-  if command -v tailscale >/dev/null; then
-    tailscale_ip=$(tailscale ip 2>/dev/null || echo "Not connected")
-    echo "• Tailscale: Installed (IP: $tailscale_ip)"
-  fi
-  if command -v netbird >/dev/null; then
-    echo "• Netbird: Installed"
-  fi
+  command -v netbird >/dev/null && echo "• Netbird VPN: Installed"
 
   echo
 }
