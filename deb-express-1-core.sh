@@ -737,8 +737,8 @@ finalize_setup() {
   echo "Your server has been configured and optimized."
   echo
   echo "NEXT STEPS:"
-  echo "1. Run ${HIGHLIGHT}debian-express-secure.sh${CL} to harden security"
-  echo "2. Run ${HIGHLIGHT}debian-express-tools.sh${CL} to install management tools"
+  echo "1. Run ${HIGHLIGHT}deb-express-2-secure.sh${CL} to harden security"
+  echo "2. Run ${HIGHLIGHT}deb-express-3-tools.sh${CL} to install management tools"
   echo
   echo "For best results, it's recommended to reboot your server now."
   echo
