@@ -126,7 +126,7 @@ EOF
 ###########################
 
 install_monitoring_tools() {
-  if ! get_yes_no "Install monitoring tools? (Fastfetch, Btop, Speedtest)"; then
+  if ! get_yes_no "Install monitoring tools? (Fastfetch, Btop)"; then
     msg_info "Skipping monitoring tools"
     return
   fi
@@ -151,12 +151,6 @@ install_monitoring_tools() {
   if get_yes_no "Install Btop? (Modern resource monitor)"; then
     apt install -y btop
     msg_ok "Btop installed"
-  fi
-
-  # Speedtest-cli
-  if get_yes_no "Install Speedtest-cli? (Internet speed test)"; then
-    apt install -y speedtest-cli
-    msg_ok "Speedtest-cli installed"
   fi
 }
 
@@ -217,20 +211,71 @@ install_dockge() {
 
   msg_info "Installing Dockge..."
 
-  mkdir -p /opt/stacks/dockge/data
-  cd /opt/stacks/dockge
+  # Create directory structure following standard
+  mkdir -p /srv/docker/dockge/data
 
-  curl -fsSL https://raw.githubusercontent.com/louislam/dockge/master/compose.yaml -o docker-compose.yml
+  # Create docker-compose.yml with custom configuration
+  cat > /srv/docker/dockge/docker-compose.yml <<'EOF'
+version: "3.8"
+
+services:
+  dockge:
+    image: louislam/dockge:1
+    container_name: dockge
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    environment:
+      - TZ=Europe/Stockholm
+      - DOCKGE_STACKS_DIR=/srv/docker
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/app/data
+      - /srv/docker:/srv/docker
+EOF
+
+  cd /srv/docker/dockge
 
   if docker compose up -d; then
     cache_server_ip
     msg_ok "Dockge installed successfully"
     echo
+    echo "Location: /srv/docker/dockge/"
+    echo "Stacks directory: /srv/docker/"
     echo "Access Dockge at: http://$SERVER_IP:5001"
     echo "Create admin account on first login"
     echo
   else
     msg_error "Dockge installation failed"
+  fi
+}
+
+###########################
+# VPN SETUP
+###########################
+
+setup_vpn() {
+  if ! get_yes_no "Set up Netbird VPN?"; then
+    msg_info "Skipping VPN setup"
+    return
+  fi
+
+  msg_info "Installing Netbird..."
+
+  if ! curl -fsSL https://pkgs.netbird.io/install.sh | sh; then
+    msg_error "Netbird installation failed"
+    return 1
+  fi
+
+  echo -n "Enter Netbird setup key: "
+  read -r setup_key
+  echo
+
+  if [ -n "$setup_key" ]; then
+    netbird up --setup-key "$setup_key"
+    msg_ok "Netbird configured"
+  else
+    msg_error "No setup key provided"
   fi
 }
 
@@ -249,9 +294,9 @@ display_summary() {
 
   command -v fastfetch >/dev/null && echo "• Fastfetch: Installed"
   command -v btop >/dev/null && echo "• Btop: Installed"
-  command -v speedtest-cli >/dev/null && echo "• Speedtest-cli: Installed"
   command -v docker >/dev/null && echo "• Docker: Installed ($(docker --version | cut -d' ' -f3 | tr -d ','))"
   docker ps 2>/dev/null | grep -q dockge && echo "• Dockge: Installed (http://$SERVER_IP:5001)"
+  command -v netbird >/dev/null && echo "• Netbird VPN: Installed"
 
   echo
 }
@@ -289,6 +334,7 @@ main() {
   install_monitoring_tools
   install_docker
   install_dockge
+  setup_vpn
 
   finalize
 }
