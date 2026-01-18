@@ -126,7 +126,7 @@ EOF
 ###########################
 
 install_monitoring_tools() {
-  if ! get_yes_no "Install monitoring tools? (Fastfetch, Btop)"; then
+  if ! get_yes_no "Install monitoring tools? (Fastfetch, Btop, Glances, LibreSpeed-cli)"; then
     msg_info "Skipping monitoring tools"
     return
   fi
@@ -151,6 +151,27 @@ install_monitoring_tools() {
   if get_yes_no "Install Btop? (Modern resource monitor)"; then
     apt install -y btop
     msg_ok "Btop installed"
+  fi
+
+  # Glances
+  if get_yes_no "Install Glances? (Advanced system monitor with web interface)"; then
+    apt install -y glances
+    msg_ok "Glances installed (run: glances)"
+  fi
+
+  # LibreSpeed-cli
+  if get_yes_no "Install LibreSpeed-cli? (Lightweight speed test tool)"; then
+    msg_info "Downloading LibreSpeed-cli..."
+    ARCH=$(uname -m)
+    case $ARCH in
+      x86_64) ARCH="amd64" ;;
+      aarch64) ARCH="arm64" ;;
+      armv7l) ARCH="armv7" ;;
+    esac
+
+    curl -fsSL "https://github.com/librespeed/speedtest-cli/releases/latest/download/librespeed-cli_linux_${ARCH}" -o /usr/local/bin/librespeed-cli
+    chmod +x /usr/local/bin/librespeed-cli
+    msg_ok "LibreSpeed-cli installed (run: librespeed-cli)"
   fi
 }
 
@@ -353,6 +374,56 @@ EOF
 }
 
 ###########################
+# DOZZLE DOCKER LOGS
+###########################
+
+install_dozzle() {
+  if ! command -v docker >/dev/null; then
+    msg_info "Docker not installed. Skipping Dozzle."
+    return
+  fi
+
+  if ! get_yes_no "Install Dozzle? (Real-time Docker log viewer with web UI)"; then
+    msg_info "Skipping Dozzle"
+    return
+  fi
+
+  msg_info "Installing Dozzle..."
+
+  # Create directory structure following standard
+  mkdir -p /srv/docker/dozzle
+
+  # Create docker-compose.yml
+  cat > /srv/docker/dozzle/docker-compose.yml <<'EOF'
+services:
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: dozzle
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - TZ=Europe/Stockholm
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+EOF
+
+  cd /srv/docker/dozzle
+
+  if docker compose up -d; then
+    cache_server_ip
+    msg_ok "Dozzle installed successfully"
+    echo
+    echo "Location: /srv/docker/dozzle/"
+    echo "Access Dozzle at: http://$SERVER_IP:8080"
+    echo "View real-time logs for all Docker containers"
+    echo
+  else
+    msg_error "Dozzle installation failed"
+  fi
+}
+
+###########################
 # VPN SETUP
 ###########################
 
@@ -396,9 +467,12 @@ display_summary() {
 
   command -v fastfetch >/dev/null && echo "• Fastfetch: Installed"
   command -v btop >/dev/null && echo "• Btop: Installed"
+  command -v glances >/dev/null && echo "• Glances: Installed"
+  command -v librespeed-cli >/dev/null && echo "• LibreSpeed-cli: Installed"
   command -v docker >/dev/null && echo "• Docker: Installed ($(docker --version | cut -d' ' -f3 | tr -d ','))"
   docker ps 2>/dev/null | grep -q dockge && echo "• Dockge: Installed (http://$SERVER_IP:5001)"
   docker ps 2>/dev/null | grep -q beszel && echo "• Beszel: Installed (http://$SERVER_IP:8090)"
+  docker ps 2>/dev/null | grep -q dozzle && echo "• Dozzle: Installed (http://$SERVER_IP:8080)"
   command -v netbird >/dev/null && echo "• Netbird VPN: Installed"
 
   echo
@@ -438,6 +512,7 @@ main() {
   install_docker
   install_dockge
   install_beszel
+  install_dozzle
   setup_vpn
 
   finalize
