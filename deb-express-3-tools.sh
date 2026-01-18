@@ -256,6 +256,103 @@ EOF
 }
 
 ###########################
+# BESZEL MONITORING
+###########################
+
+install_beszel() {
+  if ! command -v docker >/dev/null; then
+    msg_info "Docker not installed. Skipping Beszel."
+    return
+  fi
+
+  if ! get_yes_no "Install Beszel? (Lightweight server monitoring hub)"; then
+    msg_info "Skipping Beszel"
+    return
+  fi
+
+  msg_info "Installing Beszel..."
+
+  # Create directory structure following standard
+  mkdir -p /srv/docker/beszel/.beszel_data
+
+  # Ask if user wants to monitor this server too
+  local install_agent=false
+  if get_yes_no "Monitor this server? (Install Beszel agent)"; then
+    install_agent=true
+    echo -n "Enter agent KEY (or press Enter to generate later): "
+    read -r agent_key
+    echo
+  fi
+
+  # Create docker-compose.yml
+  if [ "$install_agent" = true ] && [ -n "$agent_key" ]; then
+    # Hub + Agent configuration
+    cat > /srv/docker/beszel/docker-compose.yml <<EOF
+services:
+  beszel:
+    image: henrygd/beszel
+    container_name: beszel
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    environment:
+      - TZ=Europe/Stockholm
+    volumes:
+      - ./.beszel_data:/beszel_data
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+  beszel-agent:
+    image: henrygd/beszel-agent
+    container_name: beszel-agent
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      PORT: 45876
+      KEY: "${agent_key}"
+EOF
+  else
+    # Hub only configuration
+    cat > /srv/docker/beszel/docker-compose.yml <<'EOF'
+services:
+  beszel:
+    image: henrygd/beszel
+    container_name: beszel
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    environment:
+      - TZ=Europe/Stockholm
+    volumes:
+      - ./.beszel_data:/beszel_data
+EOF
+  fi
+
+  cd /srv/docker/beszel
+
+  if docker compose up -d; then
+    cache_server_ip
+    msg_ok "Beszel installed successfully"
+    echo
+    echo "Location: /srv/docker/beszel/"
+    echo "Access Beszel at: http://$SERVER_IP:8090"
+    echo "Create admin account on first login"
+    if [ "$install_agent" = true ]; then
+      echo
+      echo "Agent installed on port 45876"
+      if [ -z "$agent_key" ]; then
+        echo "To configure agent: Add this system in Beszel UI and update KEY in docker-compose.yml"
+      fi
+    fi
+    echo
+  else
+    msg_error "Beszel installation failed"
+  fi
+}
+
+###########################
 # VPN SETUP
 ###########################
 
@@ -301,6 +398,7 @@ display_summary() {
   command -v btop >/dev/null && echo "• Btop: Installed"
   command -v docker >/dev/null && echo "• Docker: Installed ($(docker --version | cut -d' ' -f3 | tr -d ','))"
   docker ps 2>/dev/null | grep -q dockge && echo "• Dockge: Installed (http://$SERVER_IP:5001)"
+  docker ps 2>/dev/null | grep -q beszel && echo "• Beszel: Installed (http://$SERVER_IP:8090)"
   command -v netbird >/dev/null && echo "• Netbird VPN: Installed"
 
   echo
@@ -339,6 +437,7 @@ main() {
   install_monitoring_tools
   install_docker
   install_dockge
+  install_beszel
   setup_vpn
 
   finalize
