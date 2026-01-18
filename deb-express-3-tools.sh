@@ -196,8 +196,8 @@ install_docker() {
   msg_info "Creating /srv/docker directory..."
   mkdir -p /srv/docker
   chown root:docker /srv/docker
-  chmod 775 /srv/docker
-  msg_ok "/srv/docker created (docker group has write access)"
+  chmod 2775 /srv/docker
+  msg_ok "/srv/docker created (docker group has write access + setgid)"
 
   systemctl enable --now docker
   apt install -y docker-compose-plugin
