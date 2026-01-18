@@ -219,12 +219,10 @@ install_dockge() {
   msg_info "Installing Dockge..."
 
   # Create directory structure following standard
-  mkdir -p /srv/docker/dockge/data
+  mkdir -p /srv/docker/dockge/.dockge_data
 
   # Create docker-compose.yml with custom configuration
   cat > /srv/docker/dockge/docker-compose.yml <<'EOF'
-version: "3.8"
-
 services:
   dockge:
     image: louislam/dockge:1
@@ -237,7 +235,7 @@ services:
       - DOCKGE_STACKS_DIR=/srv/docker
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./data:/app/data
+      - ./.dockge_data:/app/data
       - /srv/docker:/srv/docker
 EOF
 
