@@ -100,12 +100,8 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/eviipx/debian-express-se
 
 **Intrusion Prevention:**
 - ✅ Fail2Ban installation and configuration
-- ✅ IP/CIDR whitelist with validation
+- ✅ IP/CIDR whitelist with validation (supports ranges like 192.168.0.0/16)
 - ✅ SSH jail protection (5 retries, 10 min ban)
-
-**VPN Integration:**
-- ✅ Tailscale setup
-- ✅ Netbird setup
 
 **Automatic Updates:**
 - ✅ Daily security updates
@@ -120,14 +116,53 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/eviipx/debian-express-se
 **Monitoring Tools:**
 - ✅ **Fastfetch** - Beautiful system information display
 - ✅ **Btop** - Modern resource monitor (CPU, RAM, disk, network)
-- ✅ **Speedtest-cli** - Internet speed testing
 
 **Container Management:**
 - ✅ **Docker** - Container platform installation
 - ✅ **Docker Group Management** - Add users to docker group
+- ✅ **/srv/docker Directory** - Auto-creates with docker group permissions + setgid bit
 - ✅ **Dockge** - Web UI for Docker Compose stacks (port 5001)
+  - Installed to `/srv/docker/dockge/`
+  - Manages all stacks in `/srv/docker/`
+  - Follows Docker Stack Standard with hidden data folders
+  - Timezone: Europe/Stockholm
+
+**VPN (Remote Access):**
+- ✅ **Netbird** - Open-source mesh VPN for secure remote access
 
 **All features are optional with interactive yes/no prompts!**
+
+---
+
+## 🐳 Docker Stack Standard
+
+When Docker is installed via `deb-express-3-tools.sh`, the script automatically sets up a standardized Docker environment:
+
+### Directory Structure
+```
+/srv/docker/
+├── dockge/                    ← Dockge web UI
+│   ├── docker-compose.yml
+│   └── .dockge_data/          ← hidden persistent data
+├── app1/                      ← your Docker stacks
+│   ├── docker-compose.yml
+│   ├── .env
+│   └── .app1_data/
+└── app2/
+```
+
+### Permissions Setup
+- **Owner:** `root:docker`
+- **Permissions:** `2775` (rwxrwsr-x)
+- **setgid bit enabled:** New files/folders automatically inherit `docker` group
+- **Result:** Users in docker group can create/edit/delete without sudo
+
+### Benefits
+✅ **No sudo needed** - Docker group members have full access to `/srv/docker`
+✅ **Automatic group inheritance** - All new content gets `docker` group ownership
+✅ **Clean organization** - All Docker stacks in one standard location
+✅ **Hidden data folders** - Cleaner directory listings with `.app_data/` pattern
+✅ **Easy backups** - Just backup `/srv/docker`
 
 ---
 
@@ -140,6 +175,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/eviipx/debian-express-se
 ✅ **Easy Maintenance** - Simpler to update and customize
 ✅ **Smart Detection** - Auto-detects RAM, OS, SSD/HDD
 ✅ **Input Validation** - Validates IPs, ports, CIDR ranges
+✅ **Docker Standard** - Automatic `/srv/docker` setup with proper permissions
 
 ---
 
@@ -240,8 +276,11 @@ sudo ./debian-express-secure.sh
 - Check journal size: `journalctl --disk-usage`
 
 ### Docker Permission Issues
-- Logout and login again after being added to docker group
-- Or run: `newgrp docker`
+- **After being added to docker group:** Logout and login again, or run `newgrp docker`
+- **Check group membership:** `groups` or `id`
+- **Verify /srv/docker permissions:** `ls -ld /srv/docker` should show `drwxrwsr-x root docker`
+- **Test write access:** `touch /srv/docker/test.txt` (should work without sudo)
+- **If permission denied:** Ensure you're in docker group and have logged in again
 
 ---
 
@@ -269,6 +308,14 @@ For questions or support, please open an issue on GitHub.
 
 ---
 
-## 🔄 Updates
+## 🔄 Recent Updates
 
-Check the [releases page](https://github.com/eviipx/debian-express-setup/releases) for the latest updates and changelogs.
+### Latest Changes (January 2026)
+- ✅ **Swap Configuration Fix** - Now properly removes all existing swap files before creating new ones
+- ✅ **Fail2Ban CIDR Support** - Fixed sed delimiter to properly handle CIDR ranges (e.g., 100.92.0.0/16)
+- ✅ **VPN Reorganization** - Moved VPN setup to script 3 (management tools) for better organization
+- ✅ **Streamlined Tools** - Removed speedtest-cli (broken on newer Ubuntu) and Tailscale (kept only Netbird)
+- ✅ **Docker Stack Standard** - Automatic `/srv/docker` creation with docker group + setgid permissions
+- ✅ **Dockge Improvements** - Now follows Docker Stack Standard with hidden data folders and proper location
+
+Check the [releases page](https://github.com/eviipx/debian-express-setup/releases) for full update history.
