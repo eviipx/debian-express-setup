@@ -345,15 +345,39 @@ setup_ssh_keys() {
 
 # Setup passwordless sudo
 setup_passwordless_sudo() {
-  local current_user=$(logname 2>/dev/null || whoami)
+  # Get list of users in sudo group
+  local sudo_users=$(getent group sudo | cut -d: -f4 | tr ',' ' ')
 
-  if groups "$current_user" | grep -q "\bsudo\b"; then
-    echo "${current_user} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/99-${current_user}-nopasswd
-    chmod 440 /etc/sudoers.d/99-${current_user}-nopasswd
-    msg_ok "Passwordless sudo enabled for ${current_user}"
-    echo "Passwordless sudo: Enabled for $current_user" >> "$SUMMARY_FILE"
+  if [ -z "$sudo_users" ]; then
+    msg_info "No users found in sudo group"
+    echo "Passwordless sudo: No sudo users found" >> "$SUMMARY_FILE"
+    return
+  fi
+
+  echo "Select user for passwordless sudo:"
+  echo
+
+  local user_num=1
+  declare -A user_map
+  for user in $sudo_users; do
+    echo -e "${HIGHLIGHT}$user_num${CL}) $user"
+    user_map[$user_num]=$user
+    ((user_num++))
+  done
+
+  echo
+  echo -n "Enter user number: "
+  read -r selected_num
+  echo
+
+  if [[ $selected_num =~ ^[0-9]+$ ]] && [ -n "${user_map[$selected_num]}" ]; then
+    local selected_user="${user_map[$selected_num]}"
+    echo "${selected_user} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/99-${selected_user}-nopasswd
+    chmod 440 /etc/sudoers.d/99-${selected_user}-nopasswd
+    msg_ok "Passwordless sudo enabled for ${selected_user}"
+    echo "Passwordless sudo: Enabled for $selected_user" >> "$SUMMARY_FILE"
   else
-    msg_info "$current_user is not in sudo group"
+    msg_info "Invalid selection. Passwordless sudo not configured."
     echo "Passwordless sudo: Not configured" >> "$SUMMARY_FILE"
   fi
 }
