@@ -484,12 +484,20 @@ configure_firewall() {
 
   # Enable firewall
   if [[ "$ufw_status" != *"active"* ]]; then
-    if get_yes_no "Enable firewall now?"; then
+    echo
+    echo -e "${YW}╔════════════════════════════════════════════════════════════╗${CL}"
+    echo -e "${YW}║  IMPORTANT: Firewall is configured but NOT YET ENABLED     ║${CL}"
+    echo -e "${YW}╚════════════════════════════════════════════════════════════╝${CL}"
+    echo
+    if get_yes_no "Enable firewall now? (Recommended)"; then
       echo "y" | ufw enable
-      msg_ok "Firewall enabled"
+      msg_ok "Firewall enabled and will persist after reboot"
       echo "Firewall (UFW): Enabled" >> "$SUMMARY_FILE"
     else
-      echo "Firewall (UFW): Configured but not enabled" >> "$SUMMARY_FILE"
+      msg_error "Firewall NOT enabled - your server is NOT protected!"
+      echo "Run 'sudo ufw enable' later to activate the firewall."
+      echo
+      echo "Firewall (UFW): Configured but NOT enabled" >> "$SUMMARY_FILE"
     fi
   else
     if get_yes_no "Reload firewall configuration?"; then
