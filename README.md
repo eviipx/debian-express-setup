@@ -61,6 +61,9 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/eviipx/debian-express-se
 
 ### 1️⃣ deb-express-1-core.sh - Core Configuration & Performance
 
+**Server Type Detection:**
+The script asks if you're running on a VPS/Cloud or Local/Home server and automatically adjusts optimizations accordingly.
+
 **Core System Configuration:**
 - ✅ Update and upgrade system packages
 - ✅ Configure hostname, timezone, and locale
@@ -68,12 +71,12 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/eviipx/debian-express-se
 - ✅ Create non-root user with sudo access
 
 **Performance Optimizations:**
-- ✅ **Swap Configuration** - Auto-calculated based on RAM size
-- ✅ **I/O Scheduler** - Optimized for SSDs and HDDs
-- ✅ **Kernel Parameters** - Improved file system, network, and responsiveness
+- ✅ **Swap Configuration** - Auto-calculated based on RAM and server type
+- ✅ **I/O Scheduler** - Optimized for SSDs/HDDs (local servers only)
+- ✅ **Kernel Parameters** - Tuned for VPS or local storage performance
 - ✅ **TCP BBR** - Google's congestion control for faster network throughput
 - ✅ **File Descriptor Limits** - Increased to 65535 for web servers
-- ✅ **Journal Limits** - Prevents logs from consuming too much disk space
+- ✅ **Journal Limits** - VPS: 200MB, Local: 500MB
 - ✅ **Service Cleanup** - Disables unused services (Bluetooth, printing, etc.)
 - ✅ **Nohang** - Prevents system freezes (only for systems with <16GB RAM)
 - ✅ **IPv6 Control** - Option to disable if not needed
@@ -116,16 +119,16 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/eviipx/debian-express-se
 **Monitoring Tools:**
 - ✅ **Fastfetch** - Beautiful system information display
 - ✅ **Btop** - Modern resource monitor (CPU, RAM, disk, network)
+- ✅ **Glances** - Advanced system monitor with web interface
+- ✅ **LibreSpeed-cli** - Lightweight internet speed test tool
 
 **Container Management:**
 - ✅ **Docker** - Container platform installation
 - ✅ **Docker Group Management** - Add users to docker group
 - ✅ **/srv/docker Directory** - Auto-creates with docker group permissions + setgid bit
 - ✅ **Dockge** - Web UI for Docker Compose stacks (port 5001)
-  - Installed to `/srv/docker/dockge/`
-  - Manages all stacks in `/srv/docker/`
-  - Follows Docker Stack Standard with hidden data folders
-  - Timezone: Europe/Stockholm
+- ✅ **Dozzle** - Real-time Docker log viewer (port 8080)
+- ✅ **Beszel** - Lightweight server monitoring hub (port 8090)
 
 **VPN (Remote Access):**
 - ✅ **Netbird** - Open-source mesh VPN for secure remote access
@@ -166,6 +169,34 @@ When Docker is installed via `deb-express-3-tools.sh`, the script automatically 
 
 ---
 
+## ⚡ VPS vs Local Server Optimizations
+
+The core script automatically adjusts optimizations based on your server type:
+
+| Optimization | VPS/Cloud | Local/Home Server |
+|--------------|-----------|-------------------|
+| **Swap Size** | Conservative (4GB cap) | Generous (up to 8GB) |
+| **I/O Scheduler** | Skipped (hypervisor handles) | Tuned for SSD/HDD |
+| **Dirty Ratio** | 5% (flush sooner) | 10% (more buffer) |
+| **Dirty BG Ratio** | 3% | 5% |
+| **Journal Size** | 200MB | 500MB |
+
+### Swap Recommendations by RAM
+
+| RAM | VPS | Local |
+|-----|-----|-------|
+| <2GB | 2x RAM | 2x RAM |
+| 2-4GB | 1x RAM | 1x RAM |
+| 4-8GB | 4GB | 4GB |
+| 8-16GB | 4GB | 8GB |
+| >16GB | 4GB | 8GB |
+
+**Why the difference?**
+- **VPS**: Disk I/O is typically slower (shared/network storage), so we flush dirty pages sooner and use less swap
+- **Local**: Fast local SSDs benefit from larger buffers and can handle more swap without performance issues
+
+---
+
 ## 🎯 Why Use the New Modular Scripts?
 
 ✅ **Full Control** - Every feature requires your approval
@@ -173,7 +204,8 @@ When Docker is installed via `deb-express-3-tools.sh`, the script automatically 
 ✅ **Clear Order** - Numbered scripts show execution sequence
 ✅ **Better Organization** - Each script has a focused purpose
 ✅ **Easy Maintenance** - Simpler to update and customize
-✅ **Smart Detection** - Auto-detects RAM, OS, SSD/HDD
+✅ **Smart Detection** - Auto-detects RAM, OS, SSD/HDD, VPS vs Local
+✅ **Server-Aware** - Different optimizations for VPS vs home servers
 ✅ **Input Validation** - Validates IPs, ports, CIDR ranges
 ✅ **Docker Standard** - Automatic `/srv/docker` setup with proper permissions
 
@@ -311,10 +343,12 @@ For questions or support, please open an issue on GitHub.
 ## 🔄 Recent Updates
 
 ### Latest Changes (January 2026)
-- ✅ **Swap Configuration Fix** - Now properly removes all existing swap files before creating new ones
-- ✅ **Fail2Ban CIDR Support** - Fixed sed delimiter to properly handle CIDR ranges (e.g., 100.92.0.0/16)
-- ✅ **VPN Reorganization** - Moved VPN setup to script 3 (management tools) for better organization
-- ✅ **Streamlined Tools** - Removed speedtest-cli (broken on newer Ubuntu) and Tailscale (kept only Netbird)
+- ✅ **VPS vs Local Server Detection** - Script now asks server type and adjusts optimizations accordingly
+- ✅ **Improved Swap Recommendations** - Conservative 4GB cap for VPS, up to 8GB for local servers
+- ✅ **I/O Scheduler** - Skipped for VPS (hypervisor handles it), tuned for local servers
+- ✅ **Kernel Tuning** - Different dirty ratios for VPS (5%/3%) vs local (10%/5%)
+- ✅ **Journal Limits** - VPS: 200MB, Local: 500MB
+- ✅ **New Monitoring Tools** - Added Glances, LibreSpeed-cli, Dozzle, and Beszel
 - ✅ **Docker Stack Standard** - Automatic `/srv/docker` creation with docker group + setgid permissions
 - ✅ **Dockge Improvements** - Now follows Docker Stack Standard with hidden data folders and proper location
 

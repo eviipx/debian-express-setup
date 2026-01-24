@@ -30,6 +30,7 @@ SERVER_IP=""
 OS_NAME=""
 OS_VERSION=""
 OS_PRETTY=""
+SERVER_TYPE=""  # "vps" or "local"
 
 # Function to display success messages
 msg_ok() {
@@ -104,6 +105,33 @@ cache_server_ip() {
   if [ -z "$SERVER_IP" ]; then
     SERVER_IP=$(hostname -I | awk '{print $1}')
   fi
+}
+
+# Detect server type (VPS or local)
+detect_server_type() {
+  echo "What type of server is this?"
+  echo
+  echo -e "${HIGHLIGHT}1${CL}) VPS / Cloud Server (AWS, DigitalOcean, Linode, Hetzner, etc.)"
+  echo -e "${HIGHLIGHT}2${CL}) Local / Home Server (bare metal, Proxmox VM, etc.)"
+  echo
+  echo -n "Enter option [1-2]: "
+  read -r server_choice
+  echo
+
+  case $server_choice in
+    1)
+      SERVER_TYPE="vps"
+      msg_ok "Configured for VPS/Cloud (conservative optimizations)"
+      ;;
+    2)
+      SERVER_TYPE="local"
+      msg_ok "Configured for Local/Home Server (full optimizations)"
+      ;;
+    *)
+      SERVER_TYPE="vps"
+      msg_info "Invalid option. Defaulting to VPS (safer choice)"
+      ;;
+  esac
 }
 
 # Run apt update only if not already done
@@ -277,18 +305,29 @@ configure_swap() {
   # Get system RAM
   ram_size=$(free -m | grep Mem | awk '{print $2}')
 
-  # Determine recommended swap size based on RAM
-  if [ $ram_size -lt 2048 ]; then
-    recommended_swap=$((ram_size * 2))
-  elif [ $ram_size -le 8192 ]; then
-    recommended_swap=$ram_size
-  elif [ $ram_size -le 16384 ]; then
-    recommended_swap=$((ram_size / 2))
-    if [ $recommended_swap -lt 4096 ]; then
-      recommended_swap=4096
+  # Determine recommended swap size based on RAM and server type
+  if [ "$SERVER_TYPE" = "vps" ]; then
+    # VPS: Conservative swap (disk I/O is slower, space is limited)
+    if [ $ram_size -lt 2048 ]; then
+      recommended_swap=$((ram_size * 2))  # <2GB: 2x RAM
+    elif [ $ram_size -lt 4096 ]; then
+      recommended_swap=$ram_size           # 2-4GB: 1x RAM
+    else
+      recommended_swap=4096                # 4GB+: Cap at 4GB
     fi
   else
-    recommended_swap=4096
+    # Local server: More generous swap (faster local storage)
+    if [ $ram_size -lt 2048 ]; then
+      recommended_swap=$((ram_size * 2))  # <2GB: 2x RAM
+    elif [ $ram_size -lt 4096 ]; then
+      recommended_swap=$ram_size           # 2-4GB: 1x RAM
+    elif [ $ram_size -lt 8192 ]; then
+      recommended_swap=4096                # 4-8GB: 4GB
+    elif [ $ram_size -lt 16384 ]; then
+      recommended_swap=8192                # 8-16GB: 8GB
+    else
+      recommended_swap=8192                # 16GB+: Cap at 8GB
+    fi
   fi
 
   # Display swap information
@@ -451,6 +490,12 @@ create_swap_file() {
 
 # Function to optimize IO scheduler
 optimize_io_scheduler() {
+  # Skip for VPS - hypervisor handles I/O scheduling
+  if [ "$SERVER_TYPE" = "vps" ]; then
+    msg_info "Skipping I/O scheduler (VPS: hypervisor manages disk I/O)"
+    return
+  fi
+
   if ! get_yes_no "Optimize I/O scheduler? Improves disk performance for SSDs/HDDs"; then
     msg_info "Skipping I/O scheduler optimization"
     return
@@ -469,7 +514,7 @@ optimize_io_scheduler() {
   if $has_ssd; then
     cat > /etc/udev/rules.d/60-scheduler.rules << EOF
 # Set scheduler for SSD
-ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="deadline"
+ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="mq-deadline"
 # Set scheduler for HDD
 ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
 EOF
@@ -490,10 +535,21 @@ optimize_kernel_parameters() {
     return
   fi
 
+  # Different dirty ratios for VPS vs local
+  if [ "$SERVER_TYPE" = "vps" ]; then
+    # VPS: Lower dirty ratios (flush sooner, disk I/O is slower)
+    dirty_ratio=5
+    dirty_bg_ratio=3
+  else
+    # Local: Higher dirty ratios (local storage is faster)
+    dirty_ratio=10
+    dirty_bg_ratio=5
+  fi
+
   cat > /etc/sysctl.d/99-performance.conf << EOF
 # File system performance
-vm.dirty_ratio = 10
-vm.dirty_background_ratio = 5
+vm.dirty_ratio = ${dirty_ratio}
+vm.dirty_background_ratio = ${dirty_bg_ratio}
 
 # Network performance
 net.core.somaxconn = 1024
@@ -570,16 +626,27 @@ configure_journal_limits() {
     return
   fi
 
+  # Different limits for VPS vs local
+  if [ "$SERVER_TYPE" = "vps" ]; then
+    # VPS: Smaller journal (disk space is limited)
+    journal_max="200M"
+    journal_file_max="50M"
+  else
+    # Local: Larger journal (more disk space available)
+    journal_max="500M"
+    journal_file_max="100M"
+  fi
+
   mkdir -p /etc/systemd/journald.conf.d
   cat > /etc/systemd/journald.conf.d/00-journal-size.conf << EOF
 [Journal]
-SystemMaxUse=500M
-SystemMaxFileSize=100M
+SystemMaxUse=${journal_max}
+SystemMaxFileSize=${journal_file_max}
 MaxRetentionSec=2week
 EOF
 
   systemctl restart systemd-journald
-  msg_ok "Journal size limited to 500MB"
+  msg_ok "Journal size limited to ${journal_max}"
 }
 
 # Function to disable unused services
@@ -705,6 +772,11 @@ display_summary() {
   echo -e "• Hostname: ${HIGHLIGHT}$(hostname)${CL}"
   echo -e "• IP Address: ${HIGHLIGHT}$SERVER_IP${CL}"
   echo -e "• OS: ${HIGHLIGHT}$OS_PRETTY${CL}"
+  if [ "$SERVER_TYPE" = "vps" ]; then
+    echo -e "• Server Type: ${HIGHLIGHT}VPS/Cloud${CL}"
+  else
+    echo -e "• Server Type: ${HIGHLIGHT}Local/Home Server${CL}"
+  fi
   echo
 
   # Swap status
@@ -734,7 +806,8 @@ display_summary() {
 
   # Journal limits
   if [ -f /etc/systemd/journald.conf.d/00-journal-size.conf ]; then
-    echo -e "• Journal limits: ${HIGHLIGHT}Configured (500MB)${CL}"
+    journal_configured=$(grep "SystemMaxUse" /etc/systemd/journald.conf.d/00-journal-size.conf | cut -d'=' -f2)
+    echo -e "• Journal limits: ${HIGHLIGHT}Configured (${journal_configured})${CL}"
   fi
 
   # Nohang status
@@ -789,6 +862,7 @@ main() {
   display_banner
   detect_os
   cache_server_ip
+  detect_server_type
 
   if ! get_yes_no "This script will configure core settings and optimize your server. Proceed?"; then
     echo "Setup cancelled."
