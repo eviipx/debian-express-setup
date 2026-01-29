@@ -48,6 +48,17 @@ All scripts follow the same structure:
 - `validate_port()` - Validates port numbers (1-65535)
 - `cache_server_ip()` - Caches hostname IP to avoid repeated lookups
 - `run_apt_update()` - Runs apt update only once per session (uses `APT_UPDATED` flag)
+- `configure_docker_binding()` - Detects VPN interfaces and configures Docker port binding
+- `get_port_binding()` - Returns port binding string (e.g., `100.x.x.x:8080:8080` or `8080:8080`)
+
+## Docker Port Binding Security
+
+Docker bypasses UFW by default. The script asks how to bind ports:
+- **VPN only**: Binds to detected VPN IP (Netbird `wt0`, Tailscale `tailscale0`, WireGuard `wg0`)
+- **Localhost only**: Binds to `127.0.0.1` (requires SSH tunnel)
+- **All interfaces**: Binds to `0.0.0.0` (bypasses UFW - not recommended)
+
+Installation order: VPN → Docker → Port binding config → Docker apps (Dockge, Beszel, Dozzle)
 
 ## Docker Stack Standard
 

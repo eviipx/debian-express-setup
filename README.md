@@ -111,19 +111,20 @@ The script asks if you're running on a VPS/Cloud or Local/Home server and automa
 **Monitoring Tools:**
 - ✅ **Fastfetch** - Beautiful system information display
 - ✅ **Btop** - Modern resource monitor (CPU, RAM, disk, network)
-- ✅ **Glances** - Advanced system monitor with web interface
+- ✅ **Glances** - Advanced system monitor with web interface (installed via pipx - no Python pollution)
 - ✅ **LibreSpeed-cli** - Lightweight internet speed test tool
+
+**VPN (Remote Access):** *(installed first for Docker port binding detection)*
+- ✅ **Netbird** - Open-source mesh VPN for secure remote access
 
 **Container Management:**
 - ✅ **Docker** - Container platform installation
 - ✅ **Docker Group Management** - Add users to docker group
 - ✅ **/srv/docker Directory** - Auto-creates with docker group permissions + setgid bit
+- ✅ **Docker Port Binding** - Secure binding to VPN/localhost (prevents UFW bypass)
 - ✅ **Dockge** - Web UI for Docker Compose stacks (port 5001)
 - ✅ **Dozzle** - Real-time Docker log viewer (port 8080)
 - ✅ **Beszel** - Lightweight server monitoring hub (port 8090)
-
-**VPN (Remote Access):**
-- ✅ **Netbird** - Open-source mesh VPN for secure remote access
 
 **All features are optional with interactive yes/no prompts!**
 
@@ -158,6 +159,28 @@ When Docker is installed via `deb-express-3-tools.sh`, the script automatically 
 ✅ **Clean organization** - All Docker stacks in one standard location
 ✅ **Hidden data folders** - Cleaner directory listings with `.app_data/` pattern
 ✅ **Easy backups** - Just backup `/srv/docker`
+
+---
+
+## 🔒 Docker Port Binding Security
+
+**The Problem:** By default, Docker manipulates iptables directly and bypasses UFW firewall rules. This means `ports: "8080:8080"` exposes your service to the internet even if UFW blocks port 8080.
+
+**The Solution:** The script asks how to bind Docker ports:
+
+| Option | Binding | Use Case |
+|--------|---------|----------|
+| **VPN only** | `100.x.x.x:port:port` | Access only via Netbird/Tailscale (Recommended) |
+| **Localhost only** | `127.0.0.1:port:port` | Access via SSH tunnel or reverse proxy |
+| **All interfaces** | `0.0.0.0:port:port` | ⚠️ Bypasses UFW - NOT recommended |
+| **Custom IP** | `x.x.x.x:port:port` | Bind to specific interface |
+
+**Auto-detection:** The script automatically detects VPN interfaces:
+- Netbird: `wt0`
+- Tailscale: `tailscale0`
+- WireGuard: `wg0`
+
+**Installation order:** VPN is installed before Docker so the interface can be detected.
 
 ---
 
@@ -292,14 +315,14 @@ For questions or support, please open an issue on GitHub.
 ## 🔄 Recent Updates
 
 ### Latest Changes (January 2026)
-- ✅ **Removed Old Scripts** - Deprecated `debian-express-setup.sh` and `debian-express-secure.sh` removed
-- ✅ **VPS vs Local Server Detection** - Script now asks server type and adjusts optimizations accordingly
-- ✅ **Improved Swap Recommendations** - Conservative 4GB cap for VPS, up to 8GB for local servers
-- ✅ **I/O Scheduler** - Skipped for VPS (hypervisor handles it), tuned for local servers
-- ✅ **Kernel Tuning** - Different dirty ratios for VPS (5%/3%) vs local (10%/5%)
-- ✅ **Journal Limits** - VPS: 200MB, Local: 500MB
+- ✅ **Docker Port Binding Security** - Bind Docker ports to VPN/localhost to prevent UFW bypass
+- ✅ **VPN Auto-Detection** - Automatically detects Netbird, Tailscale, WireGuard interfaces
+- ✅ **Installation Order** - VPN now installed before Docker for port binding detection
+- ✅ **Glances via pipx** - No longer pollutes system Python packages
+- ✅ **VPS vs Local Server Detection** - Script asks server type and adjusts optimizations
+- ✅ **Improved Swap Recommendations** - Conservative 4GB cap for VPS, up to 8GB for local
 - ✅ **New Monitoring Tools** - Added Glances, LibreSpeed-cli, Dozzle, and Beszel
-- ✅ **Improved UX** - Better prompts for firewall enable and passwordless sudo user selection
-- ✅ **Docker Stack Standard** - Automatic `/srv/docker` creation with docker group + setgid permissions
+- ✅ **Improved UX** - Better prompts for firewall enable and passwordless sudo
+- ✅ **Docker Stack Standard** - Automatic `/srv/docker` creation with proper permissions
 
 Check the [releases page](https://github.com/eviipx/debian-express-setup/releases) for full update history.
