@@ -399,7 +399,11 @@ configure_firewall() {
     apt install -y ufw
   fi
 
-  ufw_status=$(ufw status | head -1)
+  # Check if UFW is active (not "inactive")
+  ufw_active=false
+  if ufw status | grep -q "Status: active"; then
+    ufw_active=true
+  fi
 
   # Basic rules
   if get_yes_no "Apply basic firewall rules? (Allow SSH, deny incoming, allow outgoing)"; then
@@ -483,7 +487,7 @@ configure_firewall() {
   fi
 
   # Enable firewall
-  if [[ "$ufw_status" != *"active"* ]]; then
+  if [ "$ufw_active" = false ]; then
     echo
     echo -e "${YW}╔════════════════════════════════════════════════════════════╗${CL}"
     echo -e "${YW}║  IMPORTANT: Firewall is configured but NOT YET ENABLED     ║${CL}"
