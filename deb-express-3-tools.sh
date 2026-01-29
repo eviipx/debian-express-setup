@@ -22,6 +22,7 @@ OS_NAME=""
 OS_VERSION=""
 OS_PRETTY=""
 APT_UPDATED=false
+DOCKER_BIND_IP=""  # IP to bind Docker ports to (empty = 0.0.0.0)
 
 # Function to display success messages
 msg_ok() {
@@ -106,6 +107,110 @@ run_apt_update() {
   fi
 }
 
+# Detect VPN interface and configure Docker port binding
+configure_docker_binding() {
+  echo "Docker Port Binding Configuration"
+  echo
+  echo -e "${YW}By default, Docker bypasses UFW and exposes ports to all interfaces.${CL}"
+  echo "For security, you can bind Docker ports to a specific interface."
+  echo
+
+  # Detect VPN interfaces
+  local vpn_ip=""
+  local vpn_name=""
+
+  # Check for Netbird (wt0)
+  if ip addr show wt0 &>/dev/null; then
+    vpn_ip=$(ip addr show wt0 | grep -oP 'inet \K[\d.]+' | head -1)
+    vpn_name="Netbird (wt0)"
+  # Check for Tailscale
+  elif ip addr show tailscale0 &>/dev/null; then
+    vpn_ip=$(ip addr show tailscale0 | grep -oP 'inet \K[\d.]+' | head -1)
+    vpn_name="Tailscale (tailscale0)"
+  # Check for WireGuard
+  elif ip addr show wg0 &>/dev/null; then
+    vpn_ip=$(ip addr show wg0 | grep -oP 'inet \K[\d.]+' | head -1)
+    vpn_name="WireGuard (wg0)"
+  fi
+
+  echo "How should Docker containers bind their ports?"
+  echo
+  if [ -n "$vpn_ip" ]; then
+    echo -e "${HIGHLIGHT}1${CL}) VPN only - ${vpn_name}: ${GN}${vpn_ip}${CL} (Recommended)"
+  else
+    echo -e "${HIGHLIGHT}1${CL}) VPN only - ${YW}No VPN detected${CL}"
+  fi
+  echo -e "${HIGHLIGHT}2${CL}) Localhost only - 127.0.0.1 (Requires SSH tunnel or reverse proxy)"
+  echo -e "${HIGHLIGHT}3${CL}) All interfaces - 0.0.0.0 (${RD}Bypasses UFW - NOT recommended${CL})"
+  echo -e "${HIGHLIGHT}4${CL}) Custom IP"
+  echo
+  echo -n "Enter option [1-4]: "
+  read -r bind_choice
+  echo
+
+  case $bind_choice in
+    1)
+      if [ -n "$vpn_ip" ]; then
+        DOCKER_BIND_IP="$vpn_ip"
+        msg_ok "Docker ports will bind to VPN: $vpn_ip"
+      else
+        msg_error "No VPN interface detected. Please install Netbird/Tailscale first or choose another option."
+        configure_docker_binding  # Recurse to ask again
+        return
+      fi
+      ;;
+    2)
+      DOCKER_BIND_IP="127.0.0.1"
+      msg_ok "Docker ports will bind to localhost only"
+      echo "Access services via SSH tunnel: ssh -L 8080:127.0.0.1:8080 user@server"
+      echo
+      ;;
+    3)
+      echo
+      echo -e "${YW}╔════════════════════════════════════════════════════════════╗${CL}"
+      echo -e "${YW}║  WARNING: This exposes Docker ports to the internet!       ║${CL}"
+      echo -e "${YW}║  UFW firewall rules will NOT protect these ports.          ║${CL}"
+      echo -e "${YW}╚════════════════════════════════════════════════════════════╝${CL}"
+      echo
+      if get_yes_no "Are you sure you want to expose Docker ports to all interfaces?"; then
+        DOCKER_BIND_IP=""
+        msg_info "Docker ports will bind to all interfaces (0.0.0.0)"
+      else
+        configure_docker_binding  # Recurse to ask again
+        return
+      fi
+      ;;
+    4)
+      echo -n "Enter IP address to bind to: "
+      read -r custom_ip
+      echo
+      if [[ $custom_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        DOCKER_BIND_IP="$custom_ip"
+        msg_ok "Docker ports will bind to: $custom_ip"
+      else
+        msg_error "Invalid IP address"
+        configure_docker_binding  # Recurse to ask again
+        return
+      fi
+      ;;
+    *)
+      msg_error "Invalid option"
+      configure_docker_binding  # Recurse to ask again
+      return
+      ;;
+  esac
+}
+
+# Helper function to format port binding for docker-compose
+get_port_binding() {
+  local port="$1"
+  if [ -n "$DOCKER_BIND_IP" ]; then
+    echo "${DOCKER_BIND_IP}:${port}:${port}"
+  else
+    echo "${port}:${port}"
+  fi
+}
+
 # Display banner
 display_banner() {
   clear
@@ -153,10 +258,17 @@ install_monitoring_tools() {
     msg_ok "Btop installed"
   fi
 
-  # Glances
+  # Glances (via pipx to avoid polluting system Python)
   if get_yes_no "Install Glances? (Advanced system monitor with web interface)"; then
-    apt install -y glances
-    msg_ok "Glances installed (run: glances)"
+    msg_info "Installing Glances via pipx (isolated Python environment)..."
+    apt install -y pipx
+    pipx ensurepath
+    pipx install glances
+    # Create symlink for root access
+    if [ -f /root/.local/bin/glances ]; then
+      ln -sf /root/.local/bin/glances /usr/local/bin/glances
+    fi
+    msg_ok "Glances installed (run: glances or glances -w for web UI)"
   fi
 
   # LibreSpeed-cli
@@ -243,14 +355,15 @@ install_dockge() {
   mkdir -p /srv/docker/dockge/.dockge_data
 
   # Create docker-compose.yml with custom configuration
-  cat > /srv/docker/dockge/docker-compose.yml <<'EOF'
+  local dockge_port=$(get_port_binding 5001)
+  cat > /srv/docker/dockge/docker-compose.yml <<EOF
 services:
   dockge:
     image: louislam/dockge:1
     container_name: dockge
     restart: unless-stopped
     ports:
-      - "5001:5001"
+      - "${dockge_port}"
     environment:
       - TZ=Europe/Stockholm
       - DOCKGE_STACKS_DIR=/srv/docker
@@ -306,6 +419,7 @@ install_beszel() {
   fi
 
   # Create docker-compose.yml
+  local beszel_port=$(get_port_binding 8090)
   if [ "$install_agent" = true ] && [ -n "$agent_key" ]; then
     # Hub + Agent configuration
     cat > /srv/docker/beszel/docker-compose.yml <<EOF
@@ -315,7 +429,7 @@ services:
     container_name: beszel
     restart: unless-stopped
     ports:
-      - "8090:8090"
+      - "${beszel_port}"
     environment:
       - TZ=Europe/Stockholm
     volumes:
@@ -336,14 +450,14 @@ services:
 EOF
   else
     # Hub only configuration
-    cat > /srv/docker/beszel/docker-compose.yml <<'EOF'
+    cat > /srv/docker/beszel/docker-compose.yml <<EOF
 services:
   beszel:
     image: henrygd/beszel
     container_name: beszel
     restart: unless-stopped
     ports:
-      - "8090:8090"
+      - "${beszel_port}"
     environment:
       - TZ=Europe/Stockholm
     volumes:
@@ -394,14 +508,15 @@ install_dozzle() {
   mkdir -p /srv/docker/dozzle
 
   # Create docker-compose.yml
-  cat > /srv/docker/dozzle/docker-compose.yml <<'EOF'
+  local dozzle_port=$(get_port_binding 8080)
+  cat > /srv/docker/dozzle/docker-compose.yml <<EOF
 services:
   dozzle:
     image: amir20/dozzle:latest
     container_name: dozzle
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "${dozzle_port}"
     environment:
       - TZ=Europe/Stockholm
     volumes:
@@ -467,12 +582,26 @@ display_summary() {
 
   command -v fastfetch >/dev/null && echo "• Fastfetch: Installed"
   command -v btop >/dev/null && echo "• Btop: Installed"
-  command -v glances >/dev/null && echo "• Glances: Installed"
+  command -v glances >/dev/null && echo "• Glances: Installed (via pipx)"
   command -v librespeed-cli >/dev/null && echo "• LibreSpeed-cli: Installed"
-  command -v docker >/dev/null && echo "• Docker: Installed ($(docker --version | cut -d' ' -f3 | tr -d ','))"
-  docker ps 2>/dev/null | grep -q dockge && echo "• Dockge: Installed (http://$SERVER_IP:5001)"
-  docker ps 2>/dev/null | grep -q beszel && echo "• Beszel: Installed (http://$SERVER_IP:8090)"
-  docker ps 2>/dev/null | grep -q dozzle && echo "• Dozzle: Installed (http://$SERVER_IP:8080)"
+
+  if command -v docker >/dev/null; then
+    echo "• Docker: Installed ($(docker --version | cut -d' ' -f3 | tr -d ','))"
+
+    # Show Docker port binding
+    if [ -n "$DOCKER_BIND_IP" ]; then
+      echo "• Docker port binding: $DOCKER_BIND_IP"
+      local access_ip="$DOCKER_BIND_IP"
+    else
+      echo "• Docker port binding: 0.0.0.0 (all interfaces)"
+      local access_ip="$SERVER_IP"
+    fi
+
+    docker ps 2>/dev/null | grep -q dockge && echo "  - Dockge: http://${access_ip}:5001"
+    docker ps 2>/dev/null | grep -q beszel && echo "  - Beszel: http://${access_ip}:8090"
+    docker ps 2>/dev/null | grep -q dozzle && echo "  - Dozzle: http://${access_ip}:8080"
+  fi
+
   command -v netbird >/dev/null && echo "• Netbird VPN: Installed"
 
   echo
@@ -510,6 +639,12 @@ main() {
 
   install_monitoring_tools
   install_docker
+
+  # Configure Docker port binding if Docker is available
+  if command -v docker >/dev/null; then
+    configure_docker_binding
+  fi
+
   install_dockge
   install_beszel
   install_dozzle
