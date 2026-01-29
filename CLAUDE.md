@@ -4,16 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Debian Express Setup is a collection of bash scripts for setting up, optimizing, and securing Debian-based servers and VPS instances. It provides two approaches:
+Debian Express Setup is a collection of bash scripts for setting up, optimizing, and securing Debian-based servers and VPS instances. Three focused scripts that run in order:
 
-1. **Modular Scripts (Recommended)**: Three focused scripts that run in order
-   - `deb-express-1-core.sh` - Core configuration & performance optimization
-   - `deb-express-2-secure.sh` - Security hardening (SSH, firewall, Fail2Ban)
-   - `deb-express-3-tools.sh` - Management & monitoring tools (Docker, Dockge, Netbird)
-
-2. **Original Scripts**: Two comprehensive all-in-one scripts
-   - `debian-express-setup.sh` - System setup & optimization
-   - `debian-express-secure.sh` - Security & network configuration
+- `deb-express-1-core.sh` - Core configuration & performance optimization (VPS vs Local aware)
+- `deb-express-2-secure.sh` - Security hardening (SSH, firewall, Fail2Ban)
+- `deb-express-3-tools.sh` - Management & monitoring tools (Docker, Dockge, Glances, Dozzle, Beszel, Netbird)
 
 ## Testing Scripts
 

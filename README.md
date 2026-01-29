@@ -4,22 +4,14 @@ A comprehensive set of scripts for quickly setting up, optimizing, and securing 
 
 ## 🎯 Overview
 
-This project provides **two approaches** for server setup:
-
-### ✨ **New Modular Scripts** (Recommended)
 Three focused scripts that give you full control over what gets installed:
 - `deb-express-1-core.sh` - Core configuration & performance optimization
 - `deb-express-2-secure.sh` - Security hardening
 - `deb-express-3-tools.sh` - Management & monitoring tools
 
-### 📦 **Original Scripts** (Backward Compatible)
-Two comprehensive scripts that handle everything:
-- `debian-express-setup.sh` - System setup & optimization
-- `debian-express-secure.sh` - Security & network configuration
-
 ---
 
-## 🚀 Quick Start (New Modular Scripts)
+## 🚀 Quick Start
 
 ### Option 1: Download and Run (Recommended)
 
@@ -57,7 +49,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/eviipx/debian-express-se
 
 ---
 
-## 📋 New Modular Scripts - Detailed Features
+## 📋 Detailed Features
 
 ### 1️⃣ deb-express-1-core.sh - Core Configuration & Performance
 
@@ -197,44 +189,15 @@ The core script automatically adjusts optimizations based on your server type:
 
 ---
 
-## 🎯 Why Use the New Modular Scripts?
+## 🎯 Key Features
 
 ✅ **Full Control** - Every feature requires your approval
 ✅ **Modular Design** - Run only what you need
 ✅ **Clear Order** - Numbered scripts show execution sequence
-✅ **Better Organization** - Each script has a focused purpose
-✅ **Easy Maintenance** - Simpler to update and customize
 ✅ **Smart Detection** - Auto-detects RAM, OS, SSD/HDD, VPS vs Local
 ✅ **Server-Aware** - Different optimizations for VPS vs home servers
 ✅ **Input Validation** - Validates IPs, ports, CIDR ranges
 ✅ **Docker Standard** - Automatic `/srv/docker` setup with proper permissions
-
----
-
-## 📦 Original Scripts (Backward Compatible)
-
-The original comprehensive scripts are still available and fully functional:
-
-### debian-express-setup.sh
-Handles system setup, optimization, and container management in one script.
-
-### debian-express-secure.sh
-Handles SSH hardening, firewall, Fail2Ban, VPN, and auto-updates in one script.
-
-### Quick Start (Original Scripts)
-
-```bash
-# Download
-curl -fsSL -o debian-express-setup.sh https://raw.githubusercontent.com/eviipx/debian-express-setup/main/debian-express-setup.sh
-curl -fsSL -o debian-express-secure.sh https://raw.githubusercontent.com/eviipx/debian-express-setup/main/debian-express-secure.sh
-
-# Make executable
-chmod +x debian-express-setup.sh debian-express-secure.sh
-
-# Run in order
-sudo ./debian-express-setup.sh
-sudo ./debian-express-secure.sh
-```
 
 ---
 
@@ -243,20 +206,6 @@ sudo ./debian-express-secure.sh
 - **OS**: Debian 10+, Ubuntu 20.04+, or any Debian-based distribution
 - **Privileges**: Root access (or sudo)
 - **Connection**: Internet connection for package downloads
-
----
-
-## 📊 Comparison: New vs Original Scripts
-
-| Feature | New Modular Scripts | Original Scripts |
-|---------|---------------------|------------------|
-| **Number of Scripts** | 3 focused scripts | 2 comprehensive scripts |
-| **User Control** | Every feature optional | Less granular control |
-| **Organization** | Clear separation of concerns | All-in-one approach |
-| **Execution Order** | Numbered (1, 2, 3) | Sequential (setup, secure) |
-| **Performance Optimizations** | 10 optimizations | 4 optimizations |
-| **Flexibility** | Run any script independently | Must run both |
-| **Best For** | Users who want control | Users who want automation |
 
 ---
 
@@ -343,13 +292,14 @@ For questions or support, please open an issue on GitHub.
 ## 🔄 Recent Updates
 
 ### Latest Changes (January 2026)
+- ✅ **Removed Old Scripts** - Deprecated `debian-express-setup.sh` and `debian-express-secure.sh` removed
 - ✅ **VPS vs Local Server Detection** - Script now asks server type and adjusts optimizations accordingly
 - ✅ **Improved Swap Recommendations** - Conservative 4GB cap for VPS, up to 8GB for local servers
 - ✅ **I/O Scheduler** - Skipped for VPS (hypervisor handles it), tuned for local servers
 - ✅ **Kernel Tuning** - Different dirty ratios for VPS (5%/3%) vs local (10%/5%)
 - ✅ **Journal Limits** - VPS: 200MB, Local: 500MB
 - ✅ **New Monitoring Tools** - Added Glances, LibreSpeed-cli, Dozzle, and Beszel
+- ✅ **Improved UX** - Better prompts for firewall enable and passwordless sudo user selection
 - ✅ **Docker Stack Standard** - Automatic `/srv/docker` creation with docker group + setgid permissions
-- ✅ **Dockge Improvements** - Now follows Docker Stack Standard with hidden data folders and proper location
 
 Check the [releases page](https://github.com/eviipx/debian-express-setup/releases) for full update history.
