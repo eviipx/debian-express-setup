@@ -209,9 +209,9 @@ configure_timezone() {
 
 # Function to configure locale
 configure_locale() {
+  current_locale=$(locale | grep LANG= | cut -d= -f2)
+  echo -e "Current locale: ${HIGHLIGHT}$current_locale${CL}"
   if get_yes_no "Do you want to configure system locale?"; then
-    current_locale=$(locale | grep LANG= | cut -d= -f2)
-    echo -e "Current locale: ${HIGHLIGHT}$current_locale${CL}"
     dpkg-reconfigure locales
     new_locale=$(locale | grep LANG= | cut -d= -f2)
     msg_ok "Locale set to $new_locale"
