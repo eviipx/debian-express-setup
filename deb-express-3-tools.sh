@@ -648,6 +648,10 @@ main() {
   fi
 
   install_monitoring_tools
+
+  # Install VPN first so it can be detected for Docker port binding
+  setup_vpn
+
   install_docker
 
   # Configure Docker port binding if Docker is available
@@ -658,7 +662,6 @@ main() {
   install_dockge
   install_beszel
   install_dozzle
-  setup_vpn
 
   finalize
 }
