@@ -281,9 +281,19 @@ install_monitoring_tools() {
       armv7l) ARCH="armv7" ;;
     esac
 
-    curl -fsSL "https://github.com/librespeed/speedtest-cli/releases/latest/download/librespeed-cli_linux_${ARCH}" -o /usr/local/bin/librespeed-cli
-    chmod +x /usr/local/bin/librespeed-cli
-    msg_ok "LibreSpeed-cli installed (run: librespeed-cli)"
+    # Get latest version and download
+    LIBRESPEED_VERSION=$(curl -s https://api.github.com/repos/librespeed/speedtest-cli/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+    LIBRESPEED_URL="https://github.com/librespeed/speedtest-cli/releases/download/${LIBRESPEED_VERSION}/librespeed-cli_${LIBRESPEED_VERSION#v}_linux_${ARCH}.tar.gz"
+
+    if curl -fsSL "$LIBRESPEED_URL" -o /tmp/librespeed-cli.tar.gz; then
+      tar -xzf /tmp/librespeed-cli.tar.gz -C /tmp
+      mv /tmp/librespeed-cli /usr/local/bin/librespeed-cli
+      chmod +x /usr/local/bin/librespeed-cli
+      rm -f /tmp/librespeed-cli.tar.gz /tmp/LICENSE /tmp/README.md
+      msg_ok "LibreSpeed-cli installed (run: librespeed-cli)"
+    else
+      msg_error "Failed to download LibreSpeed-cli"
+    fi
   fi
 }
 
