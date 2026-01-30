@@ -92,6 +92,7 @@ The script asks if you're running on a VPS/Cloud or Local/Home server and automa
 - ✅ Web traffic options (HTTP/HTTPS)
 - ✅ Custom port rules with TCP/UDP selection
 - ✅ Port validation (1-65535)
+- ✅ **IPv6 Consistency** - Offers to disable UFW IPv6 when disabled at kernel level
 
 **Intrusion Prevention:**
 - ✅ Fail2Ban installation and configuration
@@ -116,6 +117,7 @@ The script asks if you're running on a VPS/Cloud or Local/Home server and automa
 
 **VPN (Remote Access):** *(installed first for Docker port binding detection)*
 - ✅ **Netbird** - Open-source mesh VPN for secure remote access
+- ✅ **SSH VPN Lockdown** - Option to restrict SSH access to VPN IP range only (100.64.0.0/10)
 
 **Container Management:**
 - ✅ **Docker** - Container platform installation
@@ -315,6 +317,8 @@ For questions or support, please open an issue on GitHub.
 ## 🔄 Recent Updates
 
 ### Latest Changes (January 2026)
+- ✅ **SSH VPN Lockdown** - Option to restrict SSH to VPN only after Netbird installation (100.64.0.0/10)
+- ✅ **UFW IPv6 Consistency** - Auto-detects if IPv6 disabled at kernel and offers to disable in UFW
 - ✅ **Docker Port Binding Security** - Bind Docker ports to VPN/localhost to prevent UFW bypass
 - ✅ **VPN Auto-Detection** - Automatically detects Netbird, Tailscale, WireGuard interfaces
 - ✅ **Installation Order** - VPN now installed before Docker for port binding detection
