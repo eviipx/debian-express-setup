@@ -571,7 +571,48 @@ setup_vpn() {
 
   if [ -n "$setup_key" ]; then
     netbird up --setup-key "$setup_key"
-    msg_ok "Netbird configured"
+
+    # Wait a moment for connection
+    sleep 3
+
+    # Check if connected and get VPN IP
+    local vpn_ip=""
+    if ip addr show wt0 &>/dev/null; then
+      vpn_ip=$(ip addr show wt0 | grep -oP 'inet \K[\d.]+' | head -1)
+    fi
+
+    if [ -n "$vpn_ip" ]; then
+      msg_ok "Netbird connected (VPN IP: $vpn_ip)"
+
+      # Offer to lock down SSH to VPN only
+      if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
+        echo
+        echo -e "${YW}╔════════════════════════════════════════════════════════════╗${CL}"
+        echo -e "${YW}║  SECURITY: Lock down SSH to VPN only?                      ║${CL}"
+        echo -e "${YW}╚════════════════════════════════════════════════════════════╝${CL}"
+        echo
+        echo "This will remove public SSH access and only allow SSH from the VPN network."
+        echo -e "VPN range: ${HIGHLIGHT}100.64.0.0/10${CL} (covers all Netbird IPs)"
+        echo
+        if get_yes_no "Restrict SSH to VPN only? (Make sure VPN is working first!)"; then
+          # Remove existing SSH rules
+          ufw delete allow 22/tcp 2>/dev/null
+          ufw delete allow ssh 2>/dev/null
+          # Add SSH only from VPN range
+          ufw allow from 100.64.0.0/10 to any port 22 proto tcp comment 'SSH via VPN only'
+          ufw reload
+          msg_ok "SSH now restricted to VPN only (100.64.0.0/10)"
+          echo
+          echo -e "${RD}WARNING: Test SSH over VPN before closing this session!${CL}"
+          echo "Run: ssh -o ConnectTimeout=5 user@${vpn_ip}"
+          echo
+        else
+          msg_info "SSH remains publicly accessible"
+        fi
+      fi
+    else
+      msg_ok "Netbird configured (not yet connected)"
+    fi
   else
     msg_error "No setup key provided"
   fi

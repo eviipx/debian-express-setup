@@ -399,6 +399,17 @@ configure_firewall() {
     apt install -y ufw
   fi
 
+  # Check if IPv6 is disabled at kernel level and offer to disable in UFW too
+  if grep -q "net.ipv6.conf.all.disable_ipv6 = 1" /etc/sysctl.d/99-performance.conf 2>/dev/null; then
+    if grep -q "IPV6=yes" /etc/default/ufw 2>/dev/null; then
+      echo -e "IPv6 is disabled at kernel level but ${YW}enabled in UFW${CL}."
+      if get_yes_no "Disable IPv6 in UFW as well? (Recommended for consistency)"; then
+        sed -i 's/IPV6=yes/IPV6=no/' /etc/default/ufw
+        msg_ok "IPv6 disabled in UFW"
+      fi
+    fi
+  fi
+
   # Check if UFW is active (not "inactive")
   ufw_active=false
   if ufw status | grep -q "Status: active"; then
